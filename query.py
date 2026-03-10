@@ -111,7 +111,6 @@ Rules:
 - When listing ROI metrics, quote them exactly as they appear in the source
 """
 
-
 def _format_context(chunks: List[Dict]) -> str:
     parts = []
     for i, chunk in enumerate(chunks, 1):
@@ -172,12 +171,6 @@ def answer(
         delta = chunk.choices[0].delta.content
         if delta:
             yield delta
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# CLI — interactive chat loop
-# ═════════════════════════════════════════════════════════════════════════════
-
 
 def chat_cli():
     print("\n" + "=" * 60)
