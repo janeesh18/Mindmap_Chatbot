@@ -101,8 +101,8 @@ You help the internal sales team find relevant case studies, capabilities, ROI m
 Rules:
 - Answer only from the provided context chunks
 - By default, be concise and direct — sales people are busy
-- Only give a detailed, in-depth answer if the user explicitly asks for it (e.g. "explain in detail", "give me a deep dive", "elaborate",
-  "tell me more")
+- Only give a detailed, in-depth answer if the user explicitly asks for it (e.g. "explain in detail", "give me a deep dive", "elaborate", "tell me \
+more")
 - Use bullet points or numbered lists only — no markdown headers (no #, ##, ###)
 - Do not use emojis or informal language
 - Do not include source citations or document references in your answer
@@ -110,6 +110,7 @@ Rules:
 - Never hallucinate metrics, client names, or outcomes
 - When listing ROI metrics, quote them exactly as they appear in the source
 """
+
 
 def _format_context(chunks: List[Dict]) -> str:
     parts = []
@@ -125,26 +126,51 @@ def _format_context(chunks: List[Dict]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-def answer(
+def get_sources(chunks: List[Dict]) -> List[Dict]:
+    """Extract unique source files from retrieved chunks, preserving rerank order."""
+    seen: dict = {}
+    for chunk in chunks:
+        fname = chunk.get("file_name", "")
+        if not fname:
+            continue
+        if fname not in seen:
+            seen[fname] = {
+                "file_name": fname,
+                "file_path": chunk.get("file_path", ""),
+                "doc_type": chunk.get("doc_type", ""),
+                "industry_vertical": chunk.get("industry_vertical", []),
+                "source_folder": chunk.get("source_folder", ""),
+                "page_numbers": set(),
+            }
+        seen[fname]["page_numbers"].update(chunk.get("page_numbers", []))
+
+    sources = []
+    for src in seen.values():
+        src["page_numbers"] = sorted(src["page_numbers"])
+        sources.append(src)
+    return sources
+
+
+_GREETINGS = {
+    "hi", "hello", "hey", "hiya", "howdy", "greetings",
+    "good morning", "good afternoon", "good evening",
+}
+
+
+def stream_answer(
     user_query: str,
+    chunks: List[Dict],
     conversation_history: List[Dict],
 ) -> Generator[str, None, None]:
-    """Retrieve + rerank → stream answer."""
+    """Stream an answer given pre-retrieved chunks (no retrieval inside)."""
 
-    # ── Greeting short-circuit ────────────────────────────────────────────
-    _greetings = {
-        "hi", "hello", "hey", "hiya", "howdy", "greetings",
-        "good morning", "good afternoon", "good evening",
-    }
-    if user_query.strip().lower().rstrip("!.,") in _greetings:
+    if user_query.strip().lower().rstrip("!.,") in _GREETINGS:
         yield (
             "Hello! How can I help you with MindMap Digital's sales collateral? "
             "You can ask about case studies, capabilities, ROI metrics, "
             "or specific industry use cases."
         )
         return
-
-    chunks = retrieve(user_query)
 
     if not chunks:
         yield "No specific data available in current collateral. Check with the delivery team."
@@ -172,6 +198,30 @@ def answer(
         if delta:
             yield delta
 
+
+def answer(
+    user_query: str,
+    conversation_history: List[Dict],
+) -> Generator[str, None, None]:
+    """2-stage pipeline: retrieve + rerank → stream answer. (Used by CLI.)"""
+
+    if user_query.strip().lower().rstrip("!.,") in _GREETINGS:
+        yield (
+            "Hello! How can I help you with MindMap Digital's sales collateral? "
+            "You can ask about case studies, capabilities, ROI metrics, "
+            "or specific industry use cases."
+        )
+        return
+
+    chunks = retrieve(user_query)
+    yield from stream_answer(user_query, chunks, conversation_history)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# CLI — interactive chat loop
+# ═════════════════════════════════════════════════════════════════════════════
+
+
 def chat_cli():
     print("\n" + "=" * 60)
     print("  MindMap Sales Collateral Assistant")
@@ -194,6 +244,7 @@ def chat_cli():
             break
 
         print("\nAssistant: ", end="", flush=True)
+
         full_response = ""
         for token in answer(user_input, history):
             print(token, end="", flush=True)
