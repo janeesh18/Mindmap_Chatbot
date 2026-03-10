@@ -1,262 +1,146 @@
-from __future__ import annotations
-
 import os
-from typing import Generator, List, Dict, Optional
+import json
+import streamlit as st
+from query import retrieve, get_sources, stream_answer, _GREETINGS
+from config import DATA_DIR
 
-import cohere
-from dotenv import load_dotenv
-from openai import OpenAI
-from qdrant_client import QdrantClient
-
-from config import (
-    COLLECTION_NAME,
-    EMBEDDING_DIM,
-    EMBEDDING_MODEL,
-    OPENAI_API_KEY,
-    QDRANT_API_KEY,
-    QDRANT_URL,
+st.set_page_config(
+    page_title="MindMap Sales Assistant",
+    page_icon="💼",
+    layout="centered",
 )
 
-load_dotenv()
-
-COHERE_API_KEY = os.getenv("COHERE_API_KEY")
-RERANK_MODEL = "rerank-english-v3.0"
-RERANK_TOP_N = 5
-RETRIEVAL_TOP_K = 20
-
-_openai: OpenAI | None = None
-_qdrant: QdrantClient | None = None
-_cohere: cohere.Client | None = None
+CHATS_FILE = str(DATA_DIR.parent / "chats.json")
 
 
-def openai_client() -> OpenAI:
-    global _openai
-    if _openai is None:
-        _openai = OpenAI(api_key=OPENAI_API_KEY)
-    return _openai
-
-
-def qdrant_client() -> QdrantClient:
-    global _qdrant
-    if _qdrant is None:
-        kwargs = {"url": QDRANT_URL}
-        if QDRANT_API_KEY:
-            kwargs["api_key"] = QDRANT_API_KEY
-        _qdrant = QdrantClient(**kwargs)
-    return _qdrant
-
-
-def cohere_client() -> cohere.Client:
-    global _cohere
-    if _cohere is None:
-        _cohere = cohere.Client(api_key=COHERE_API_KEY)
-    return _cohere
-
-
-def _embed_query(text: str) -> List[float]:
-    resp = openai_client().embeddings.create(
-        model=EMBEDDING_MODEL,
-        input=text.replace("\n", " "),
-    )
-    return resp.data[0].embedding
-
-
-def retrieve(user_query: str) -> List[Dict]:
-    """Qdrant search → Cohere rerank."""
-    query_vec = _embed_query(user_query)
-
-    results = qdrant_client().query_points(
-        collection_name=COLLECTION_NAME,
-        query=query_vec,
-        limit=RETRIEVAL_TOP_K,
-        with_payload=True,
-    ).points
-
-    if not results:
-        return []
-
-    chunks = [r.payload for r in results]
-
-    rerank_resp = cohere_client().rerank(
-        model=RERANK_MODEL,
-        query=user_query,
-        documents=[c.get("text", "") for c in chunks],
-        top_n=RERANK_TOP_N,
-    )
-
-    reranked = []
-    for hit in rerank_resp.results:
-        chunk = chunks[hit.index]
-        chunk["_rerank_score"] = round(hit.relevance_score, 4)
-        reranked.append(chunk)
-
-    return reranked
-
-
-ANSWER_SYSTEM = """
-You are a sales assistant for MindMap Digital — an RPA and AI automation consultancy.
-
-You help the internal sales team find relevant case studies, capabilities, ROI metrics, and use cases from MindMap's sales collateral.
-
-Rules:
-- Answer only from the provided context chunks
-- By default, be concise and direct — sales people are busy
-- Only give a detailed, in-depth answer if the user explicitly asks for it (e.g. "explain in detail", "give me a deep dive", "elaborate", "tell me \
-more")
-- Use bullet points or numbered lists only — no markdown headers (no #, ##, ###)
-- Do not use emojis or informal language
-- Do not include source citations or document references in your answer
-- If the context doesn't have enough information, say: "No specific data available in current collateral. Check with the delivery team."
-- Never hallucinate metrics, client names, or outcomes
-- When listing ROI metrics, quote them exactly as they appear in the source
-"""
-
-
-def _format_context(chunks: List[Dict]) -> str:
-    parts = []
-    for i, chunk in enumerate(chunks, 1):
-        parts.append(
-            f"[Chunk {i}]\n"
-            f"File: {chunk.get('file_name', 'Unknown')}\n"
-            f"Type: {chunk.get('doc_type', 'Unknown')}\n"
-            f"Section: {chunk.get('section_type', 'Unknown')}\n"
-            f"Verticals: {', '.join(chunk.get('industry_vertical', []))}\n\n"
-            f"{chunk.get('text', '')}"
-        )
-    return "\n\n---\n\n".join(parts)
-
-
-def get_sources(chunks: List[Dict]) -> List[Dict]:
-    """Extract unique source files from retrieved chunks, preserving rerank order."""
-    seen: dict = {}
-    for chunk in chunks:
-        fname = chunk.get("file_name", "")
-        if not fname:
-            continue
-        if fname not in seen:
-            seen[fname] = {
-                "file_name": fname,
-                "file_path": chunk.get("file_path", ""),
-                "doc_type": chunk.get("doc_type", ""),
-                "industry_vertical": chunk.get("industry_vertical", []),
-                "source_folder": chunk.get("source_folder", ""),
-                "page_numbers": set(),
-            }
-        seen[fname]["page_numbers"].update(chunk.get("page_numbers", []))
-
-    sources = []
-    for src in seen.values():
-        src["page_numbers"] = sorted(src["page_numbers"])
-        sources.append(src)
-    return sources
-
-
-_GREETINGS = {
-    "hi", "hello", "hey", "hiya", "howdy", "greetings",
-    "good morning", "good afternoon", "good evening",
-}
-
-
-def stream_answer(
-    user_query: str,
-    chunks: List[Dict],
-    conversation_history: List[Dict],
-) -> Generator[str, None, None]:
-    """Stream an answer given pre-retrieved chunks (no retrieval inside)."""
-
-    if user_query.strip().lower().rstrip("!.,") in _GREETINGS:
-        yield (
-            "Hello! How can I help you with MindMap Digital's sales collateral? "
-            "You can ask about case studies, capabilities, ROI metrics, "
-            "or specific industry use cases."
-        )
-        return
-
-    if not chunks:
-        yield "No specific data available in current collateral. Check with the delivery team."
-        return
-
-    context = _format_context(chunks)
-
-    messages = [{"role": "system", "content": ANSWER_SYSTEM}]
-    messages.extend(conversation_history[-10:])
-    messages.append({
-        "role": "user",
-        "content": f"Context from sales collateral:\n\n{context}\n\nQuestion: {user_query}",
-    })
-
-    stream = openai_client().chat.completions.create(
-        model="gpt-4o",
-        messages=messages,
-        temperature=0.3,
-        max_tokens=1000,
-        stream=True,
-    )
-
-    for chunk in stream:
-        delta = chunk.choices[0].delta.content
-        if delta:
-            yield delta
-
-
-def answer(
-    user_query: str,
-    conversation_history: List[Dict],
-) -> Generator[str, None, None]:
-    """2-stage pipeline: retrieve + rerank → stream answer. (Used by CLI.)"""
-
-    if user_query.strip().lower().rstrip("!.,") in _GREETINGS:
-        yield (
-            "Hello! How can I help you with MindMap Digital's sales collateral? "
-            "You can ask about case studies, capabilities, ROI metrics, "
-            "or specific industry use cases."
-        )
-        return
-
-    chunks = retrieve(user_query)
-    yield from stream_answer(user_query, chunks, conversation_history)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# CLI — interactive chat loop
-# ═════════════════════════════════════════════════════════════════════════════
-
-
-def chat_cli():
-    print("\n" + "=" * 60)
-    print("  MindMap Sales Collateral Assistant")
-    print("  Type 'exit' to quit")
-    print("=" * 60 + "\n")
-
-    history: List[Dict] = []
-
-    while True:
+def load_chats():
+    if os.path.exists(CHATS_FILE):
         try:
-            user_input = input("You: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\nGoodbye!")
-            break
-
-        if not user_input:
-            continue
-        if user_input.lower() in {"exit", "quit", "bye"}:
-            print("Goodbye!")
-            break
-
-        print("\nAssistant: ", end="", flush=True)
-
-        full_response = ""
-        for token in answer(user_input, history):
-            print(token, end="", flush=True)
-            full_response += token
-
-        print("\n")
-
-        history.append({"role": "user", "content": user_input})
-        history.append({"role": "assistant", "content": full_response})
-        if len(history) > 10:
-            history = history[-10:]
+            with open(CHATS_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return [{"title": "New Chat", "messages": [], "history": []}]
 
 
-if __name__ == "__main__":
-    chat_cli()
+def save_chats():
+    with open(CHATS_FILE, "w") as f:
+        json.dump(st.session_state.chats, f)
+
+
+# ── Session state init ────────────────────────────────────────────────────────
+
+if "chats" not in st.session_state:
+    st.session_state.chats = load_chats()
+if "active_chat" not in st.session_state:
+    st.session_state.active_chat = 0
+
+
+def current_chat():
+    return st.session_state.chats[st.session_state.active_chat]
+
+
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+
+with st.sidebar:
+    st.title("Chats")
+    if st.button("+ New Chat", use_container_width=True):
+        st.session_state.chats.append({"title": "New Chat", "messages": [], "history": []})
+        st.session_state.active_chat = len(st.session_state.chats) - 1
+        save_chats()
+        st.rerun()
+
+    st.divider()
+
+    for i, chat in enumerate(st.session_state.chats):
+        label = chat["title"]
+        if i == st.session_state.active_chat:
+            st.markdown(f"**> {label}**")
+        else:
+            if st.button(label, key=f"chat_{i}", use_container_width=True):
+                st.session_state.active_chat = i
+                st.rerun()
+
+
+# ── Main area ─────────────────────────────────────────────────────────────────
+
+st.title("MindMap Sales Assistant")
+st.caption("Ask about case studies, capabilities, ROI metrics, and use cases.")
+
+
+def render_sources(sources: list, key_prefix: str = "") -> None:
+    if not sources:
+        return
+    label = f"Sources ({len(sources)} file{'s' if len(sources) != 1 else ''})"
+    with st.expander(label, expanded=False):
+        for src in sources:
+            fname = src["file_name"]
+            fpath = src.get("file_path", "")
+            doc_type = src.get("doc_type", "").replace("_", " ").title()
+            verticals = src.get("industry_vertical", [])
+            meta = doc_type
+            if verticals:
+                meta += "  ·  " + ", ".join(verticals)
+
+            full_path = str(DATA_DIR / fpath) if fpath and not os.path.isabs(fpath) else fpath
+
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.markdown(f"**{fname}**  \n*{meta}*")
+            with col2:
+                if full_path and os.path.exists(full_path):
+                    ext = os.path.splitext(fname)[1].lower()
+                    mime_map = {
+                        ".pdf":  "application/pdf",
+                        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    }
+                    mime = mime_map.get(ext, "application/octet-stream")
+                    with open(full_path, "rb") as f:
+                        file_bytes = f.read()
+                    st.download_button(
+                        label="Download",
+                        data=file_bytes,
+                        file_name=fname,
+                        mime=mime,
+                        key=f"{key_prefix}_{fname}",
+                    )
+
+
+# Render existing messages in active chat
+chat = current_chat()
+for i, msg in enumerate(chat["messages"]):
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+        if msg["role"] == "assistant" and msg.get("sources"):
+            render_sources(msg["sources"], key_prefix=f"c{st.session_state.active_chat}_msg{i}")
+
+
+# Chat input
+if prompt := st.chat_input("Ask something..."):
+    chat = current_chat()
+
+    # Set chat title from first user message
+    if not chat["messages"]:
+        chat["title"] = prompt[:40] + ("..." if len(prompt) > 40 else "")
+
+    chat["messages"].append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    is_greeting = prompt.strip().lower().rstrip("!.,") in _GREETINGS
+    chunks = [] if is_greeting else retrieve(prompt)
+    sources = get_sources(chunks)
+
+    with st.chat_message("assistant"):
+        response = st.write_stream(stream_answer(prompt, chunks, chat["history"]))
+        render_sources(sources, key_prefix=f"c{st.session_state.active_chat}_current")
+
+    chat["messages"].append({"role": "assistant", "content": response, "sources": sources})
+
+    chat["history"].append({"role": "user", "content": prompt})
+    chat["history"].append({"role": "assistant", "content": response})
+    if len(chat["history"]) > 10:
+        chat["history"] = chat["history"][-10:]
+
+    save_chats()
