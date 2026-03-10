@@ -28,7 +28,7 @@ def save_chats():
         json.dump(st.session_state.chats, f)
 
 
-# ── Session state init ────────────────────────────────────────────────────────
+# ── Session state init ──────────────────────────────────────────────────────
 
 if "chats" not in st.session_state:
     st.session_state.chats = load_chats()
@@ -40,12 +40,14 @@ def current_chat():
     return st.session_state.chats[st.session_state.active_chat]
 
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
+# ── Sidebar ─────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.title("Chats")
     if st.button("+ New Chat", use_container_width=True):
-        st.session_state.chats.append({"title": "New Chat", "messages": [], "history": []})
+        st.session_state.chats.append(
+            {"title": "New Chat", "messages": [], "history": []}
+        )
         st.session_state.active_chat = len(st.session_state.chats) - 1
         save_chats()
         st.rerun()
@@ -62,7 +64,7 @@ with st.sidebar:
                 st.rerun()
 
 
-# ── Main area ─────────────────────────────────────────────────────────────────
+# ── Main area ───────────────────────────────────────────────────────────────
 
 st.title("MindMap Sales Assistant")
 st.caption("Ask about case studies, capabilities, ROI metrics, and use cases.")
@@ -82,7 +84,11 @@ def render_sources(sources: list, key_prefix: str = "") -> None:
             if verticals:
                 meta += "  ·  " + ", ".join(verticals)
 
-            full_path = str(DATA_DIR / fpath) if fpath and not os.path.isabs(fpath) else fpath
+            full_path = (
+                str(DATA_DIR / fpath)
+                if fpath and not os.path.isabs(fpath)
+                else fpath
+            )
 
             col1, col2 = st.columns([4, 1])
             with col1:
@@ -91,7 +97,7 @@ def render_sources(sources: list, key_prefix: str = "") -> None:
                 if full_path and os.path.exists(full_path):
                     ext = os.path.splitext(fname)[1].lower()
                     mime_map = {
-                        ".pdf":  "application/pdf",
+                        ".pdf": "application/pdf",
                         ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
                         ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     }
@@ -113,7 +119,10 @@ for i, msg in enumerate(chat["messages"]):
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if msg["role"] == "assistant" and msg.get("sources"):
-            render_sources(msg["sources"], key_prefix=f"c{st.session_state.active_chat}_msg{i}")
+            render_sources(
+                msg["sources"],
+                key_prefix=f"c{st.session_state.active_chat}_msg{i}",
+            )
 
 
 # Chat input
@@ -134,9 +143,14 @@ if prompt := st.chat_input("Ask something..."):
 
     with st.chat_message("assistant"):
         response = st.write_stream(stream_answer(prompt, chunks, chat["history"]))
-        render_sources(sources, key_prefix=f"c{st.session_state.active_chat}_current")
+        render_sources(
+            sources,
+            key_prefix=f"c{st.session_state.active_chat}_current",
+        )
 
-    chat["messages"].append({"role": "assistant", "content": response, "sources": sources})
+    chat["messages"].append(
+        {"role": "assistant", "content": response, "sources": sources}
+    )
 
     chat["history"].append({"role": "user", "content": prompt})
     chat["history"].append({"role": "assistant", "content": response})
