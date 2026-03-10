@@ -1,103 +1,262 @@
+from __future__ import annotations
+
 import os
-from pathlib import Path
+from typing import Generator, List, Dict, Optional
+
+import cohere
 from dotenv import load_dotenv
+from openai import OpenAI
+from qdrant_client import QdrantClient
+
+from config import (
+    COLLECTION_NAME,
+    EMBEDDING_DIM,
+    EMBEDDING_MODEL,
+    OPENAI_API_KEY,
+    QDRANT_API_KEY,
+    QDRANT_URL,
+)
 
 load_dotenv()
 
-DATA_DIR = Path(os.getenv("DATA_DIR", r"C:\Users\janee\OneDrive\文档\chatboit\Sales Collateral"))
+COHERE_API_KEY = os.getenv("COHERE_API_KEY")
+RERANK_MODEL = "rerank-english-v3.0"
+RERANK_TOP_N = 5
+RETRIEVAL_TOP_K = 20
 
-OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY")
-EMBEDDING_MODEL = "text-embedding-3-small"
-EMBEDDING_DIM   = 1536
-EMBEDDING_BATCH = 100       
-VLM_MODEL       = "gpt-4o"
-IMAGE_DPI       = 200        
+_openai: OpenAI | None = None
+_qdrant: QdrantClient | None = None
+_cohere: cohere.Client | None = None
 
-QDRANT_URL      = os.getenv("QDRANT_URL", "http://localhost:6333")
-QDRANT_API_KEY  = os.getenv("QDRANT_API_KEY", "")
-COLLECTION_NAME = "mindmap_sales_collateral"
 
-CHUNK_SIZE_WORDS    = 380    # ≈ 500 tokens
-CHUNK_OVERLAP_WORDS = 60    
-MIN_CHUNK_WORDS     = 30
-ONEPAGER_THRESHOLD  = 400   
-UPSERT_BATCH        = 50    
+def openai_client() -> OpenAI:
+    global _openai
+    if _openai is None:
+        _openai = OpenAI(api_key=OPENAI_API_KEY)
+    return _openai
 
-VLM_REQUIRED_FILES = {
-    "19 Billing Reconciliation for Home Care.pdf",
-    "20 Cash Reciepts Posting.pdf",
-    "21 Claims Ageing Report.pdf",
-    "22 Caregiver Onboarding Process.pdf",
-    "23 Patient Access Automation.pdf",
-    "24 Patient Admissions Process Automation.pdf",
-    "25 Appointment Scheduling.pdf",
-    "26 Insurance Claims Pre Authorization.pdf",
-    "28 Cash Applications.pdf",
-    "UAE Bank - RPA NER.pdf",
-    "Digital Automation CoE One Slider for RPA.pdf",
-    "MindMap AI 1 Slider.pdf",
-    "MindMap AWS and GCP Deck.pdf",
-    "MindMap Digital 3 pager brief.pdf",
-    "MindMap Fractional CFO Advisory.pdf",
-    "MindMap Sharepoint Capabilites.pdf",
+
+def qdrant_client() -> QdrantClient:
+    global _qdrant
+    if _qdrant is None:
+        kwargs = {"url": QDRANT_URL}
+        if QDRANT_API_KEY:
+            kwargs["api_key"] = QDRANT_API_KEY
+        _qdrant = QdrantClient(**kwargs)
+    return _qdrant
+
+
+def cohere_client() -> cohere.Client:
+    global _cohere
+    if _cohere is None:
+        _cohere = cohere.Client(api_key=COHERE_API_KEY)
+    return _cohere
+
+
+def _embed_query(text: str) -> List[float]:
+    resp = openai_client().embeddings.create(
+        model=EMBEDDING_MODEL,
+        input=text.replace("\n", " "),
+    )
+    return resp.data[0].embedding
+
+
+def retrieve(user_query: str) -> List[Dict]:
+    """Qdrant search → Cohere rerank."""
+    query_vec = _embed_query(user_query)
+
+    results = qdrant_client().query_points(
+        collection_name=COLLECTION_NAME,
+        query=query_vec,
+        limit=RETRIEVAL_TOP_K,
+        with_payload=True,
+    ).points
+
+    if not results:
+        return []
+
+    chunks = [r.payload for r in results]
+
+    rerank_resp = cohere_client().rerank(
+        model=RERANK_MODEL,
+        query=user_query,
+        documents=[c.get("text", "") for c in chunks],
+        top_n=RERANK_TOP_N,
+    )
+
+    reranked = []
+    for hit in rerank_resp.results:
+        chunk = chunks[hit.index]
+        chunk["_rerank_score"] = round(hit.relevance_score, 4)
+        reranked.append(chunk)
+
+    return reranked
+
+
+ANSWER_SYSTEM = """
+You are a sales assistant for MindMap Digital — an RPA and AI automation consultancy.
+
+You help the internal sales team find relevant case studies, capabilities, ROI metrics, and use cases from MindMap's sales collateral.
+
+Rules:
+- Answer only from the provided context chunks
+- By default, be concise and direct — sales people are busy
+- Only give a detailed, in-depth answer if the user explicitly asks for it (e.g. "explain in detail", "give me a deep dive", "elaborate", "tell me \
+more")
+- Use bullet points or numbered lists only — no markdown headers (no #, ##, ###)
+- Do not use emojis or informal language
+- Do not include source citations or document references in your answer
+- If the context doesn't have enough information, say: "No specific data available in current collateral. Check with the delivery team."
+- Never hallucinate metrics, client names, or outcomes
+- When listing ROI metrics, quote them exactly as they appear in the source
+"""
+
+
+def _format_context(chunks: List[Dict]) -> str:
+    parts = []
+    for i, chunk in enumerate(chunks, 1):
+        parts.append(
+            f"[Chunk {i}]\n"
+            f"File: {chunk.get('file_name', 'Unknown')}\n"
+            f"Type: {chunk.get('doc_type', 'Unknown')}\n"
+            f"Section: {chunk.get('section_type', 'Unknown')}\n"
+            f"Verticals: {', '.join(chunk.get('industry_vertical', []))}\n\n"
+            f"{chunk.get('text', '')}"
+        )
+    return "\n\n---\n\n".join(parts)
+
+
+def get_sources(chunks: List[Dict]) -> List[Dict]:
+    """Extract unique source files from retrieved chunks, preserving rerank order."""
+    seen: dict = {}
+    for chunk in chunks:
+        fname = chunk.get("file_name", "")
+        if not fname:
+            continue
+        if fname not in seen:
+            seen[fname] = {
+                "file_name": fname,
+                "file_path": chunk.get("file_path", ""),
+                "doc_type": chunk.get("doc_type", ""),
+                "industry_vertical": chunk.get("industry_vertical", []),
+                "source_folder": chunk.get("source_folder", ""),
+                "page_numbers": set(),
+            }
+        seen[fname]["page_numbers"].update(chunk.get("page_numbers", []))
+
+    sources = []
+    for src in seen.values():
+        src["page_numbers"] = sorted(src["page_numbers"])
+        sources.append(src)
+    return sources
+
+
+_GREETINGS = {
+    "hi", "hello", "hey", "hiya", "howdy", "greetings",
+    "good morning", "good afternoon", "good evening",
 }
 
-# Image-heavy PDFs whose PPTX twin is better — skip PDF, PPTX will be picked up
-SKIP_PDF_USE_PPTX = {
-    "MindMap Digital New Deck v5 for gitex.pdf",
-    "MindMap Digital HCP DT.pdf",
-    "Chatbot Presentation.pdf",
-    "Transform Banking.pdf",
-    "Transform Origniations.pdf",
-    "MindMap Mortgages Pack.pdf",
-    "AE for BFSI_V1.0.pdf",
-    "MM Trade Processing & Settlement - Case Study.pdf",
-}
 
-# Exact duplicates — keep only the canonical version
-SKIP_DUPLICATES = {
-    "MindMap Digital New Deck v5 for gitex-MMDL_HY_007.pdf",   # dup of gitex PPTX
-    "09 Faster Diagnostics for Medical Diagnosis center (1).pdf",
-    "Piramal Pharma Case Study.pdf",
-    "Cheques Data Extraction Case Study.pdf",
-}
+def stream_answer(
+    user_query: str,
+    chunks: List[Dict],
+    conversation_history: List[Dict],
+) -> Generator[str, None, None]:
+    """Stream an answer given pre-retrieved chunks (no retrieval inside)."""
 
-# No-PPTX-twin image PDFs — add to VLM so they're not silently dropped
-VLM_REQUIRED_FILES.add("MindMap Digital - the Art of Digital Transformation.pdf")
+    if user_query.strip().lower().rstrip("!.,") in _GREETINGS:
+        yield (
+            "Hello! How can I help you with MindMap Digital's sales collateral? "
+            "You can ask about case studies, capabilities, ROI metrics, "
+            "or specific industry use cases."
+        )
+        return
 
-# Entire folders to exclude
-SKIP_FOLDERS = {"Videos and Demos"}
+    if not chunks:
+        yield "No specific data available in current collateral. Check with the delivery team."
+        return
 
-# Extensions with no indexable text
-SKIP_EXTENSIONS = {".mp4", ".mov", ".gif", ".jpg", ".jpeg", ".png", ".avi", ".xlsx"}
+    context = _format_context(chunks)
 
-# ── Taxonomy ───────────────────────────────────────────────────────────────
-FOLDER_TO_DOCTYPE = {
-    "Case Studies":                                     "case_study",
-    "HeatMaps":                                         "heatmap",
-    "Different Types of Collateral":                    "capability_deck",
-    "Client Specific Material which can be referenced": "proposal_client",
-    "Samples and Examples":                             "assessment_sample",
-    "Vertical Wise":                                    "industry_pack",
-}
+    messages = [{"role": "system", "content": ANSWER_SYSTEM}]
+    messages.extend(conversation_history[-10:])
+    messages.append({
+        "role": "user",
+        "content": f"Context from sales collateral:\n\n{context}\n\nQuestion: {user_query}",
+    })
 
-FOLDER_TO_VERTICAL = {
-    "BFSI":                     ["BFSI"],
-    "Healthcare":               ["Healthcare"],
-    "F&A":                      ["FA"],
-    "HR":                       ["HR"],
-    "IT":                       ["IT"],
-    "Aviation":                 ["Aviation"],
-    "MFG":                      ["Manufacturing"],
-    "SCM":                      ["SCM"],
-    "Telecom":                  ["Telecom"],
-    "Government":               ["Government"],
-    "Retail":                   ["Retail"],
-    "Education":                ["Education"],
-    "Contact Centers":          ["Contact Centers"],
-    "Transport and Logistics":  ["Logistics"],
-    "SAP":                      ["SAP"],
-    "Legal":                    ["Legal"],
-    "Utilities":                ["Utilities"],
-    "Non Digital":              ["General"],
-}
+    stream = openai_client().chat.completions.create(
+        model="gpt-4o",
+        messages=messages,
+        temperature=0.3,
+        max_tokens=1000,
+        stream=True,
+    )
+
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content
+        if delta:
+            yield delta
+
+
+def answer(
+    user_query: str,
+    conversation_history: List[Dict],
+) -> Generator[str, None, None]:
+    """2-stage pipeline: retrieve + rerank → stream answer. (Used by CLI.)"""
+
+    if user_query.strip().lower().rstrip("!.,") in _GREETINGS:
+        yield (
+            "Hello! How can I help you with MindMap Digital's sales collateral? "
+            "You can ask about case studies, capabilities, ROI metrics, "
+            "or specific industry use cases."
+        )
+        return
+
+    chunks = retrieve(user_query)
+    yield from stream_answer(user_query, chunks, conversation_history)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# CLI — interactive chat loop
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def chat_cli():
+    print("\n" + "=" * 60)
+    print("  MindMap Sales Collateral Assistant")
+    print("  Type 'exit' to quit")
+    print("=" * 60 + "\n")
+
+    history: List[Dict] = []
+
+    while True:
+        try:
+            user_input = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nGoodbye!")
+            break
+
+        if not user_input:
+            continue
+        if user_input.lower() in {"exit", "quit", "bye"}:
+            print("Goodbye!")
+            break
+
+        print("\nAssistant: ", end="", flush=True)
+
+        full_response = ""
+        for token in answer(user_input, history):
+            print(token, end="", flush=True)
+            full_response += token
+
+        print("\n")
+
+        history.append({"role": "user", "content": user_input})
+        history.append({"role": "assistant", "content": full_response})
+        if len(history) > 10:
+            history = history[-10:]
+
+
+if __name__ == "__main__":
+    chat_cli()
