@@ -1,7 +1,7 @@
 import os
 import json
 import streamlit as st
-from query import retrieve, get_sources, stream_answer, _GREETINGS
+from rag import retrieve, get_sources, stream_answer, _GREETINGS
 from config import DATA_DIR
 
 st.set_page_config(
