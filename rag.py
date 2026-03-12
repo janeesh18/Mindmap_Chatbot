@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import os
 from typing import Generator, List, Dict, Optional
 
@@ -18,9 +19,9 @@ from config import (
 
 load_dotenv()
 
-COHERE_API_KEY  = os.getenv("COHERE_API_KEY")
-RERANK_MODEL    = "rerank-english-v3.0"
-RERANK_TOP_N    = 5
+COHERE_API_KEY = os.getenv("COHERE_API_KEY")
+RERANK_MODEL = "rerank-english-v3.0"
+RERANK_TOP_N = 5
 RETRIEVAL_TOP_K = 20
 
 _openai: OpenAI | None = None
@@ -94,14 +95,17 @@ def retrieve(user_query: str) -> List[Dict]:
 
 ANSWER_SYSTEM = """
 You are a sales assistant for MindMap Digital — an RPA and AI automation consultancy.
-
 You help the internal sales team find relevant case studies, capabilities, ROI metrics, and use cases from MindMap's sales collateral.
 
-Rules:
+RESPONSE LENGTH — THIS IS THE MOST IMPORTANT RULE:
+- DEFAULT: Give a SHORT answer — maximum 3 to 4 bullet points or 2 to 3 sentences. No more.
+- IN-DEPTH ONLY when the user explicitly says: "explain in detail", "deep dive", "elaborate", "tell me more", "expand", "give me everything", \
+or similar. Only then give a full detailed response.
+- If in doubt, be shorter. A sales rep is in front of a client — they need a quick sharp answer, not a paragraph.
+
+Other rules:
 - Answer only from the provided context chunks
-- By default, be concise and direct — sales people are busy
-- Only give a detailed, in-depth answer if the user explicitly asks for it (e.g. "explain in detail", "give me a deep dive", "elaborate", "tell me more")
-- Use bullet points or numbered lists only — no markdown headers (no #, ##, ###)
+- Use bullet points or short sentences — no markdown headers (no #, ##, ###)
 - Do not use emojis or informal language
 - Do not include source citations or document references in your answer
 - If the context doesn't have enough information, say: "No specific data available in current collateral. Check with the delivery team."
@@ -149,7 +153,10 @@ def get_sources(chunks: List[Dict]) -> List[Dict]:
     return sources
 
 
-_GREETINGS = {"hi", "hello", "hey", "hiya", "howdy", "greetings", "good morning", "good afternoon", "good evening"}
+_GREETINGS = {
+    "hi", "hello", "hey", "hiya", "howdy", "greetings",
+    "good morning", "good afternoon", "good evening",
+}
 
 
 def stream_answer(
@@ -160,7 +167,11 @@ def stream_answer(
     """Stream an answer given pre-retrieved chunks (no retrieval inside)."""
 
     if user_query.strip().lower().rstrip("!.,") in _GREETINGS:
-        yield "Hello! How can I help you with MindMap Digital's sales collateral? You can ask about case studies, capabilities, ROI metrics, or specific industry use cases."
+        yield (
+            "Hello! How can I help you with MindMap Digital's sales collateral? "
+            "You can ask about case studies, capabilities, ROI metrics, "
+            "or specific industry use cases."
+        )
         return
 
     if not chunks:
@@ -197,7 +208,11 @@ def answer(
     """2-stage pipeline: retrieve + rerank → stream answer. (Used by CLI.)"""
 
     if user_query.strip().lower().rstrip("!.,") in _GREETINGS:
-        yield "Hello! How can I help you with MindMap Digital's sales collateral? You can ask about case studies, capabilities, ROI metrics, or specific industry use cases."
+        yield (
+            "Hello! How can I help you with MindMap Digital's sales collateral? "
+            "You can ask about case studies, capabilities, ROI metrics, "
+            "or specific industry use cases."
+        )
         return
 
     chunks = retrieve(user_query)
@@ -207,6 +222,7 @@ def answer(
 # ═════════════════════════════════════════════════════════════════════════════
 # CLI — interactive chat loop
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 def chat_cli():
     print("\n" + "=" * 60)
@@ -238,7 +254,7 @@ def chat_cli():
 
         print("\n")
 
-        history.append({"role": "user",      "content": user_input})
+        history.append({"role": "user", "content": user_input})
         history.append({"role": "assistant", "content": full_response})
         if len(history) > 10:
             history = history[-10:]
