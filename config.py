@@ -42,7 +42,6 @@ VLM_REQUIRED_FILES = {
     "MindMap Sharepoint Capabilites.pdf",
 }
 
-# Image-heavy PDFs whose PPTX twin is better — skip PDF, PPTX will be picked up
 SKIP_PDF_USE_PPTX = {
     "MindMap Digital New Deck v5 for gitex.pdf",
     "MindMap Digital HCP DT.pdf",
@@ -62,16 +61,12 @@ SKIP_DUPLICATES = {
     "Cheques Data Extraction Case Study.pdf",
 }
 
-# No-PPTX-twin image PDFs — add to VLM so they're not silently dropped
 VLM_REQUIRED_FILES.add("MindMap Digital - the Art of Digital Transformation.pdf")
 
-# Entire folders to exclude
 SKIP_FOLDERS = {"Videos and Demos"}
 
-# Extensions with no indexable text
 SKIP_EXTENSIONS = {".mp4", ".mov", ".gif", ".jpg", ".jpeg", ".png", ".avi", ".xlsx"}
 
-# ── Taxonomy ───────────────────────────────────────────────────────────────
 FOLDER_TO_DOCTYPE = {
     "Case Studies":                                     "case_study",
     "HeatMaps":                                         "heatmap",
