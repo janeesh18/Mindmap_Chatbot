@@ -21,7 +21,6 @@ from config import (
 load_dotenv()
 
 COHERE_API_KEY = os.getenv("COHERE_API_KEY")
-
 RERANK_MODEL = "rerank-english-v3.0"
 RERANK_TOP_N = 5
 RETRIEVAL_TOP_K = 50
@@ -64,26 +63,20 @@ def _embed_query(text: str) -> List[float]:
 
 
 def _clean_query(query: str) -> str:
-    """
-    Remove brand name from query so embedding focuses on topic.
-    Only strips if enough meaningful words remain.
-    """
+    """Remove brand name from query so embedding focuses on topic, not company name.
+    Only strips if enough meaningful words remain after removal."""
     cleaned = re.sub(r"\bmindmap('?s?)?\b", "", query, flags=re.IGNORECASE)
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ,?.")
     stopwords = {
         "what", "does", "do", "is", "are", "the", "a", "an",
-        "tell", "me", "about", "how", "why", "who", "where",
-        "when", "your"
+        "tell", "me", "about", "how", "why", "who", "where", "when", "your",
     }
-
     meaningful = [w for w in cleaned.split() if w.lower() not in stopwords]
-
     return cleaned if len(meaningful) >= 2 else query
 
 
 def retrieve(user_query: str) -> List[Dict]:
     """Qdrant search → Cohere rerank."""
-
     query_vec = _embed_query(_clean_query(user_query))
 
     from qdrant_client.models import PayloadSelectorInclude
@@ -92,26 +85,18 @@ def retrieve(user_query: str) -> List[Dict]:
         collection_name=COLLECTION_NAME,
         query=query_vec,
         limit=RETRIEVAL_TOP_K,
-        with_payload=PayloadSelectorInclude(
-            include=[
-                "text",
-                "file_name",
-                "file_path",
-                "file_url",
-                "doc_type",
-                "industry_vertical",
-                "section_type",
-                "source_folder",
-                "page_numbers",
-            ]
-        ),
+        with_payload=PayloadSelectorInclude(include=[
+            "text", "file_name", "file_path", "file_url",
+            "doc_type", "industry_vertical", "section_type",
+            "source_folder", "page_numbers",
+        ]),
     ).points
 
     if not results:
         return []
 
     cleaned = _clean_query(user_query)
-    filter_boilerplate = cleaned != user_query
+    filter_boilerplate = cleaned != user_query  # only filter if query was cleaned
 
     BOILERPLATE = (
         "mindmap digital is a",
@@ -120,8 +105,7 @@ def retrieve(user_query: str) -> List[Dict]:
     )
 
     chunks = [
-        r.payload
-        for r in results
+        r.payload for r in results
         if not filter_boilerplate
         or not r.payload.get("text", "").strip().lower().startswith(BOILERPLATE)
     ]
@@ -137,7 +121,6 @@ def retrieve(user_query: str) -> List[Dict]:
     )
 
     reranked = []
-
     for hit in rerank_resp.results:
         chunk = chunks[hit.index]
         chunk["_rerank_score"] = round(hit.relevance_score, 4)
@@ -148,30 +131,44 @@ def retrieve(user_query: str) -> List[Dict]:
 
 ANSWER_SYSTEM = """
 You are a sales assistant for MindMap Digital — an RPA and AI automation consultancy.
+You help the internal sales team find relevant case studies, capabilities, ROI metrics, \
+and use cases from MindMap's sales collateral.
 
-CRITICAL RULE — NO HALLUCINATION:
-- Only use information that appears in the provided context chunks.
-- Do NOT invent client names, metrics, or outcomes.
+CRITICAL — NO HALLUCINATION:
+- ONLY use information that appears word-for-word in the provided context chunks.
+- If a client name, metric, percentage, or outcome is not explicitly stated in the context, \
+DO NOT include it.
+- Do NOT invent, infer, extrapolate, or generalise any facts, numbers, client names, or outcomes.
+- Do NOT combine partial information from different chunks to fabricate a claim that no single \
+chunk supports.
+- If the context does not contain enough information, say exactly: \
+"No specific data available in current collateral. Check with the delivery team."
 
 RESPONSE LENGTH:
-- Default: Short — 3–4 bullet points or 2–3 sentences.
-- Detailed answers only if explicitly requested.
+- DEFAULT: Short and sharp — maximum 3 to 4 bullet points or 2 to 3 sentences. Sales reps need \
+quick answers they can use in front of a client.
+- IN-DEPTH: Only when the user explicitly asks with phrases like "explain in detail", "deep dive", \
+"elaborate", "tell me more", "expand", or "give me everything".
+- When in doubt, be shorter.
 
-Other rules:
-- Use bullet points or short sentences.
+FORMATTING:
+- Use bullet points or short sentences only.
+- No markdown headers (no #, ##, ###).
 - No emojis or informal language.
-- No source citations.
-- If insufficient information say:
-  "No specific data available in current collateral. Check with the delivery team."
+- No source citations or document references in the answer.
+- When listing ROI metrics, quote them exactly as they appear in the context — do not round, \
+rephrase, or approximate.
+
+AMBIGUOUS QUERIES:
+- If the query is too vague to retrieve a useful answer (e.g. "tell me about automation"), ask \
+one short clarifying question instead of guessing. For example: "Could you specify the industry \
+or function area? (e.g. BFSI, Healthcare, Accounts Payable)"
 """
 
 
 def _format_context(chunks: List[Dict]) -> str:
-
     parts = []
-
     for i, chunk in enumerate(chunks, 1):
-
         parts.append(
             f"[Chunk {i}]\n"
             f"File: {chunk.get('file_name', 'Unknown')}\n"
@@ -180,22 +177,17 @@ def _format_context(chunks: List[Dict]) -> str:
             f"Verticals: {', '.join(chunk.get('industry_vertical', []))}\n\n"
             f"{chunk.get('text', '')}"
         )
-
     return "\n\n---\n\n".join(parts)
 
 
 def get_sources(chunks: List[Dict]) -> List[Dict]:
-
+    """Extract unique source files from retrieved chunks, preserving rerank order."""
     seen: dict = {}
-
     for chunk in chunks:
-
         fname = chunk.get("file_name", "")
         if not fname:
             continue
-
         if fname not in seen:
-
             seen[fname] = {
                 "file_name": fname,
                 "file_path": chunk.get("file_path", ""),
@@ -205,22 +197,18 @@ def get_sources(chunks: List[Dict]) -> List[Dict]:
                 "source_folder": chunk.get("source_folder", ""),
                 "page_numbers": set(),
             }
-
         seen[fname]["page_numbers"].update(chunk.get("page_numbers", []))
 
     sources = []
-
     for src in seen.values():
-
         src["page_numbers"] = sorted(src["page_numbers"])
         sources.append(src)
-
     return sources
 
 
 _GREETINGS = {
-    "hi", "hello", "hey", "hiya", "howdy",
-    "greetings", "good morning", "good afternoon", "good evening"
+    "hi", "hello", "hey", "hiya", "howdy", "greetings",
+    "good morning", "good afternoon", "good evening",
 }
 
 
@@ -229,9 +217,9 @@ def stream_answer(
     chunks: List[Dict],
     conversation_history: List[Dict],
 ) -> Generator[str, None, None]:
+    """Stream an answer given pre-retrieved chunks (no retrieval inside)."""
 
     if user_query.strip().lower().rstrip("!.,") in _GREETINGS:
-
         yield (
             "Hello! How can I help you with MindMap Digital's sales collateral? "
             "You can ask about case studies, capabilities, ROI metrics, "
@@ -247,7 +235,6 @@ def stream_answer(
 
     messages = [{"role": "system", "content": ANSWER_SYSTEM}]
     messages.extend(conversation_history[-10:])
-
     messages.append({
         "role": "user",
         "content": f"Context from sales collateral:\n\n{context}\n\nQuestion: {user_query}",
@@ -262,7 +249,6 @@ def stream_answer(
     )
 
     for chunk in stream:
-
         delta = chunk.choices[0].delta.content
         if delta:
             yield delta
@@ -272,9 +258,9 @@ def answer(
     user_query: str,
     conversation_history: List[Dict],
 ) -> Generator[str, None, None]:
+    """2-stage pipeline: retrieve + rerank → stream answer. (Used by CLI.)"""
 
     if user_query.strip().lower().rstrip("!.,") in _GREETINGS:
-
         yield (
             "Hello! How can I help you with MindMap Digital's sales collateral? "
             "You can ask about case studies, capabilities, ROI metrics, "
@@ -283,32 +269,31 @@ def answer(
         return
 
     chunks = retrieve(user_query)
-
     yield from stream_answer(user_query, chunks, conversation_history)
 
 
-# CLI Chat
-def chat_cli():
+# ═════════════════════════════════════════════════════════════════════════════
+# CLI — interactive chat loop
+# ═════════════════════════════════════════════════════════════════════════════
 
+
+def chat_cli():
     print("\n" + "=" * 60)
-    print("MindMap Sales Collateral Assistant")
-    print("Type 'exit' to quit")
+    print("  MindMap Sales Collateral Assistant")
+    print("  Type 'exit' to quit")
     print("=" * 60 + "\n")
 
     history: List[Dict] = []
 
     while True:
-
         try:
             user_input = input("You: ").strip()
-
         except (EOFError, KeyboardInterrupt):
             print("\nGoodbye!")
             break
 
         if not user_input:
             continue
-
         if user_input.lower() in {"exit", "quit", "bye"}:
             print("Goodbye!")
             break
@@ -316,7 +301,6 @@ def chat_cli():
         print("\nAssistant: ", end="", flush=True)
 
         full_response = ""
-
         for token in answer(user_input, history):
             print(token, end="", flush=True)
             full_response += token
@@ -325,7 +309,6 @@ def chat_cli():
 
         history.append({"role": "user", "content": user_input})
         history.append({"role": "assistant", "content": full_response})
-
         if len(history) > 10:
             history = history[-10:]
 
