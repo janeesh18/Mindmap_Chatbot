@@ -1,10 +1,8 @@
 import os
 import json
 import streamlit as st
-
 from rag import retrieve, get_sources, stream_answer, _GREETINGS
 from config import DATA_DIR
-
 
 st.set_page_config(
     page_title="MindMap Sales Assistant",
@@ -22,14 +20,7 @@ def load_chats():
                 return json.load(f)
         except Exception:
             pass
-
-    return [
-        {
-            "title": "New Chat",
-            "messages": [],
-            "history": []
-        }
-    ]
+    return [{"title": "New Chat", "messages": [], "history": []}]
 
 
 def save_chats():
@@ -37,7 +28,7 @@ def save_chats():
         json.dump(st.session_state.chats, f)
 
 
-# ── Session state init ─────────────────────────────────────────────────────────
+# ── Session state init ─────────────────────────────────────
 
 if "chats" not in st.session_state:
     st.session_state.chats = load_chats()
@@ -50,21 +41,15 @@ def current_chat():
     return st.session_state.chats[st.session_state.active_chat]
 
 
-# ── Sidebar ────────────────────────────────────────────────────────────────────
+# ── Sidebar ───────────────────────────────────────────────
 
 with st.sidebar:
-
     st.title("Chats")
 
     if st.button("+ New Chat", use_container_width=True):
         st.session_state.chats.append(
-            {
-                "title": "New Chat",
-                "messages": [],
-                "history": []
-            }
+            {"title": "New Chat", "messages": [], "history": []}
         )
-
         st.session_state.active_chat = len(st.session_state.chats) - 1
         save_chats()
         st.rerun()
@@ -72,33 +57,29 @@ with st.sidebar:
     st.divider()
 
     for i, chat in enumerate(st.session_state.chats):
-
         label = chat["title"]
 
         if i == st.session_state.active_chat:
             st.markdown(f"**> {label}**")
-
         else:
             if st.button(label, key=f"chat_{i}", use_container_width=True):
                 st.session_state.active_chat = i
                 st.rerun()
 
 
-# ── Main area ──────────────────────────────────────────────────────────────────
+# ── Main area ─────────────────────────────────────────────
 
 st.title("MindMap Sales Assistant")
 st.caption("Ask about case studies, capabilities, ROI metrics, and use cases.")
 
 
 def render_sources(sources: list, key_prefix: str = "") -> None:
-
     if not sources:
         return
 
     label = f"Sources ({len(sources)} file{'s' if len(sources) != 1 else ''})"
 
     with st.expander(label, expanded=False):
-
         for src in sources:
 
             fname = src["file_name"]
@@ -108,7 +89,6 @@ def render_sources(sources: list, key_prefix: str = "") -> None:
             verticals = src.get("industry_vertical", [])
 
             meta = doc_type
-
             if verticals:
                 meta += "  ·  " + ", ".join(verticals)
 
@@ -118,7 +98,6 @@ def render_sources(sources: list, key_prefix: str = "") -> None:
                 st.markdown(f"**{fname}**  \n*{meta}*")
 
             with col2:
-
                 # Local run: serve file bytes directly
                 full_path = (
                     str(DATA_DIR / fpath)
@@ -152,12 +131,11 @@ def render_sources(sources: list, key_prefix: str = "") -> None:
                     st.link_button("Download", file_url)
 
 
-# ── Render existing messages ───────────────────────────────────────────────────
+# ── Render existing messages ──────────────────────────────
 
 chat = current_chat()
 
 for i, msg in enumerate(chat["messages"]):
-
     with st.chat_message(msg["role"]):
 
         st.markdown(msg["content"])
@@ -165,24 +143,21 @@ for i, msg in enumerate(chat["messages"]):
         if msg["role"] == "assistant" and msg.get("sources"):
             render_sources(
                 msg["sources"],
-                key_prefix=f"c{st.session_state.active_chat}_msg{i}"
+                key_prefix=f"c{st.session_state.active_chat}_msg{i}",
             )
 
 
-# ── Chat input ─────────────────────────────────────────────────────────────────
+# ── Chat input ────────────────────────────────────────────
 
 if prompt := st.chat_input("Ask something..."):
 
     chat = current_chat()
 
-    # Set chat title from first message
+    # Set chat title from first user message
     if not chat["messages"]:
         chat["title"] = prompt[:40] + ("..." if len(prompt) > 40 else "")
 
-    chat["messages"].append({
-        "role": "user",
-        "content": prompt
-    })
+    chat["messages"].append({"role": "user", "content": prompt})
 
     with st.chat_message("user"):
         st.markdown(prompt)
@@ -196,27 +171,17 @@ if prompt := st.chat_input("Ask something..."):
         response = st.write_stream(
             stream_answer(prompt, chunks, chat["history"])
         )
-
         render_sources(
             sources,
-            key_prefix=f"c{st.session_state.active_chat}_current"
+            key_prefix=f"c{st.session_state.active_chat}_current",
         )
 
-    chat["messages"].append({
-        "role": "assistant",
-        "content": response,
-        "sources": sources
-    })
+    chat["messages"].append(
+        {"role": "assistant", "content": response, "sources": sources}
+    )
 
-    chat["history"].append({
-        "role": "user",
-        "content": prompt
-    })
-
-    chat["history"].append({
-        "role": "assistant",
-        "content": response
-    })
+    chat["history"].append({"role": "user", "content": prompt})
+    chat["history"].append({"role": "assistant", "content": response})
 
     if len(chat["history"]) > 10:
         chat["history"] = chat["history"][-10:]
