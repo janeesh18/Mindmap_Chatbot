@@ -1,8 +1,10 @@
 import os
 import json
 import streamlit as st
+
 from rag import retrieve, get_sources, stream_answer, _GREETINGS
 from config import DATA_DIR
+
 
 st.set_page_config(
     page_title="MindMap Sales Assistant",
@@ -20,6 +22,7 @@ def load_chats():
                 return json.load(f)
         except Exception:
             pass
+
     return [{"title": "New Chat", "messages": [], "history": []}]
 
 
@@ -28,7 +31,7 @@ def save_chats():
         json.dump(st.session_state.chats, f)
 
 
-# ── Session state init ─────────────────────────────────────
+# ── Session state init ───────────────────────────────────
 
 if "chats" not in st.session_state:
     st.session_state.chats = load_chats()
@@ -41,9 +44,10 @@ def current_chat():
     return st.session_state.chats[st.session_state.active_chat]
 
 
-# ── Sidebar ───────────────────────────────────────────────
+# ── Sidebar ──────────────────────────────────────────────
 
 with st.sidebar:
+
     st.title("Chats")
 
     if st.button("+ New Chat", use_container_width=True):
@@ -57,29 +61,37 @@ with st.sidebar:
     st.divider()
 
     for i, chat in enumerate(st.session_state.chats):
+
         label = chat["title"]
 
         if i == st.session_state.active_chat:
             st.markdown(f"**> {label}**")
+
         else:
             if st.button(label, key=f"chat_{i}", use_container_width=True):
                 st.session_state.active_chat = i
                 st.rerun()
 
 
-# ── Main area ─────────────────────────────────────────────
+# ── Main area ───────────────────────────────────────────
 
 st.title("MindMap Sales Assistant")
 st.caption("Ask about case studies, capabilities, ROI metrics, and use cases.")
 
 
 def render_sources(sources: list, key_prefix: str = "") -> None:
+
     if not sources:
         return
 
     label = f"Sources ({len(sources)} file{'s' if len(sources) != 1 else ''})"
 
     with st.expander(label, expanded=False):
+
+        st.caption(
+            f"DEBUG: {[{'name': s['file_name'], 'url': s.get('file_url','')} for s in sources]}"
+        )
+
         for src in sources:
 
             fname = src["file_name"]
@@ -98,7 +110,7 @@ def render_sources(sources: list, key_prefix: str = "") -> None:
                 st.markdown(f"**{fname}**  \n*{meta}*")
 
             with col2:
-                # Local run: serve file bytes directly
+
                 full_path = (
                     str(DATA_DIR / fpath)
                     if fpath and not os.path.isabs(fpath)
@@ -126,16 +138,16 @@ def render_sources(sources: list, key_prefix: str = "") -> None:
                         key=f"{key_prefix}_{fname}",
                     )
 
-                # Streamlit Cloud: link directly to Google Drive
                 elif file_url:
                     st.link_button("Download", file_url)
 
 
-# ── Render existing messages ──────────────────────────────
+# ── Render existing messages ─────────────────────────────
 
 chat = current_chat()
 
 for i, msg in enumerate(chat["messages"]):
+
     with st.chat_message(msg["role"]):
 
         st.markdown(msg["content"])
@@ -147,13 +159,12 @@ for i, msg in enumerate(chat["messages"]):
             )
 
 
-# ── Chat input ────────────────────────────────────────────
+# ── Chat input ───────────────────────────────────────────
 
 if prompt := st.chat_input("Ask something..."):
 
     chat = current_chat()
 
-    # Set chat title from first user message
     if not chat["messages"]:
         chat["title"] = prompt[:40] + ("..." if len(prompt) > 40 else "")
 
@@ -168,9 +179,11 @@ if prompt := st.chat_input("Ask something..."):
     sources = get_sources(chunks)
 
     with st.chat_message("assistant"):
+
         response = st.write_stream(
             stream_answer(prompt, chunks, chat["history"])
         )
+
         render_sources(
             sources,
             key_prefix=f"c{st.session_state.active_chat}_current",
