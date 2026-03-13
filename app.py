@@ -88,10 +88,6 @@ def render_sources(sources: list, key_prefix: str = "") -> None:
 
     with st.expander(label, expanded=False):
 
-        st.caption(
-            f"DEBUG: {[{'name': s['file_name'], 'url': s.get('file_url','')} for s in sources]}"
-        )
-
         for src in sources:
 
             fname = src["file_name"]
