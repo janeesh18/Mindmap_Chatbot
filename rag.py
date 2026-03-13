@@ -20,6 +20,7 @@ from config import (
 load_dotenv()
 
 COHERE_API_KEY = os.getenv("COHERE_API_KEY")
+
 RERANK_MODEL = "rerank-english-v3.0"
 RERANK_TOP_N = 5
 RETRIEVAL_TOP_K = 20
@@ -31,25 +32,33 @@ _cohere: cohere.Client | None = None
 
 def openai_client() -> OpenAI:
     global _openai
+
     if _openai is None:
         _openai = OpenAI(api_key=OPENAI_API_KEY)
+
     return _openai
 
 
 def qdrant_client() -> QdrantClient:
     global _qdrant
+
     if _qdrant is None:
         kwargs = {"url": QDRANT_URL}
+
         if QDRANT_API_KEY:
             kwargs["api_key"] = QDRANT_API_KEY
+
         _qdrant = QdrantClient(**kwargs)
+
     return _qdrant
 
 
 def cohere_client() -> cohere.Client:
     global _cohere
+
     if _cohere is None:
         _cohere = cohere.Client(api_key=COHERE_API_KEY)
+
     return _cohere
 
 
@@ -58,6 +67,7 @@ def _embed_query(text: str) -> List[float]:
         model=EMBEDDING_MODEL,
         input=text.replace("\n", " "),
     )
+
     return resp.data[0].embedding
 
 
@@ -66,12 +76,12 @@ def retrieve(user_query: str) -> List[Dict]:
 
     query_vec = _embed_query(user_query)
 
-    results = qdrant_client().search(
+    results = qdrant_client().query_points(
         collection_name=COLLECTION_NAME,
-        query_vector=query_vec,
+        query=query_vec,
         limit=RETRIEVAL_TOP_K,
         with_payload=True,
-    )
+    ).points
 
     if not results:
         return []
@@ -86,6 +96,7 @@ def retrieve(user_query: str) -> List[Dict]:
     )
 
     reranked = []
+
     for hit in rerank_resp.results:
         chunk = chunks[hit.index]
         chunk["_rerank_score"] = round(hit.relevance_score, 4)
@@ -96,30 +107,29 @@ def retrieve(user_query: str) -> List[Dict]:
 
 ANSWER_SYSTEM = """
 You are a sales assistant for MindMap Digital — an RPA and AI automation consultancy.
-You help the internal sales team find relevant case studies, capabilities, ROI metrics, and use cases from MindMap's sales collateral.
 
-RESPONSE LENGTH — THIS IS THE MOST IMPORTANT RULE:
-- DEFAULT: Give a SHORT answer — maximum 3 to 4 bullet points or 2 to 3 sentences. No more.
-- IN-DEPTH ONLY when the user explicitly says: "explain in detail", "deep dive", "elaborate", "tell me more", "expand", "give me everything",
-  or similar. Only then give a full detailed response.
-- If in doubt, be shorter. A sales rep is in front of a client — they need a quick sharp answer, not a paragraph.
+You help the internal sales team find relevant case studies, capabilities, ROI metrics, 
+and use cases from MindMap's sales collateral.
 
-Other rules:
+Rules:
 - Answer only from the provided context chunks
-- Use bullet points or short sentences — no markdown headers (no #, ##, ###)
+- By default, be concise and direct — sales people are busy
+- Only give a detailed, in-depth answer if the user explicitly asks for it
+- Use bullet points or numbered lists only — no markdown headers
 - Do not use emojis or informal language
-- Do not include source citations or document references in your answer
-- If the context doesn't have enough information, say:
+- Do not include source citations in your answer
+- If the context lacks information say:
   "No specific data available in current collateral. Check with the delivery team."
 - Never hallucinate metrics, client names, or outcomes
-- When listing ROI metrics, quote them exactly as they appear in the source
 """
 
 
 def _format_context(chunks: List[Dict]) -> str:
+
     parts = []
 
     for i, chunk in enumerate(chunks, 1):
+
         parts.append(
             f"[Chunk {i}]\n"
             f"File: {chunk.get('file_name', 'Unknown')}\n"
@@ -140,6 +150,7 @@ def get_sources(chunks: List[Dict]) -> List[Dict]:
     for chunk in chunks:
 
         fname = chunk.get("file_name", "")
+
         if not fname:
             continue
 
@@ -183,12 +194,13 @@ def stream_answer(
     chunks: List[Dict],
     conversation_history: List[Dict],
 ) -> Generator[str, None, None]:
-    """Stream answer using retrieved chunks."""
 
     if user_query.strip().lower().rstrip("!.,") in _GREETINGS:
+
         yield (
             "Hello! How can I help you with MindMap Digital's sales collateral? "
-            "You can ask about case studies, capabilities, ROI metrics, or industry use cases."
+            "You can ask about case studies, capabilities, ROI metrics, "
+            "or specific industry use cases."
         )
         return
 
@@ -200,6 +212,7 @@ def stream_answer(
 
     messages = [{"role": "system", "content": ANSWER_SYSTEM}]
     messages.extend(conversation_history[-10:])
+
     messages.append(
         {
             "role": "user",
@@ -217,6 +230,7 @@ def stream_answer(
 
     for chunk in stream:
         delta = chunk.choices[0].delta.content
+
         if delta:
             yield delta
 
@@ -225,22 +239,24 @@ def answer(
     user_query: str,
     conversation_history: List[Dict],
 ) -> Generator[str, None, None]:
-    """retrieve → rerank → answer"""
 
     if user_query.strip().lower().rstrip("!.,") in _GREETINGS:
+
         yield (
             "Hello! How can I help you with MindMap Digital's sales collateral? "
-            "You can ask about case studies, capabilities, ROI metrics, or industry use cases."
+            "You can ask about case studies, capabilities, ROI metrics, "
+            "or specific industry use cases."
         )
         return
 
     chunks = retrieve(user_query)
+
     yield from stream_answer(user_query, chunks, conversation_history)
 
 
-# ═══════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────
 # CLI Chat
-# ═══════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────
 
 def chat_cli():
 
@@ -255,6 +271,7 @@ def chat_cli():
 
         try:
             user_input = input("You: ").strip()
+
         except (EOFError, KeyboardInterrupt):
             print("\nGoodbye!")
             break
