@@ -380,22 +380,24 @@ def stream_answer(
         yield _NO_DATA_RESPONSE
         return
 
-    context = _format_context(chunks)
-
-    # Build explicit client-name allowlist so GPT-4o cannot extract names from text body
+    context        = _format_context(chunks)
     actual_clients = sorted({c.get("client_name") for c in chunks if c.get("client_name")})
-    client_note = (
-        f"\n\nVALID CLIENT NAMES (from 'Client:' fields only): {', '.join(actual_clients)}. "
-        "Do NOT mention any other client or company names found in the text. "
-        "If the question asks which clients or companies we have worked with, "
-        "list ONLY these names as the answer — do not say 'no data'."
-    ) if actual_clients else ""
 
     messages = [{"role": "system", "content": ANSWER_SYSTEM}]
+
+    # Inject client constraint as a system message so it overrides conversation history
+    if actual_clients:
+        messages.append({"role": "system", "content": (
+            f"OVERRIDE: For this query the ONLY valid client names are: {', '.join(actual_clients)}. "
+            "Ignore any client names from earlier in the conversation. "
+            "If asked which clients we worked with, list ONLY these names. "
+            "Do NOT mention any other company names from the text."
+        )})
+
     messages.extend(conversation_history[-10:])
     messages.append({
         "role":    "user",
-        "content": f"Context from sales collateral:\n\n{context}\n\nQuestion: {user_query}{client_note}",
+        "content": f"Context from sales collateral:\n\n{context}\n\nQuestion: {user_query}",
     })
 
     stream = openai_client().chat.completions.create(
