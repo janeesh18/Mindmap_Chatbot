@@ -4,25 +4,30 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# ── Paths ──────────────────────────────────────────────────────────────────
 DATA_DIR = Path(os.getenv("DATA_DIR", r"C:\Users\janee\OneDrive\文档\chatboit\Sales Collateral"))
 
+# ── OpenAI ─────────────────────────────────────────────────────────────────
 OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY")
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIM   = 1536
-EMBEDDING_BATCH = 100       
+EMBEDDING_BATCH = 100
 VLM_MODEL       = "gpt-4o"
-IMAGE_DPI       = 200        
+IMAGE_DPI       = 200
 
-QDRANT_URL      = os.getenv("QDRANT_URL", "http://localhost:6333")
-QDRANT_API_KEY  = os.getenv("QDRANT_API_KEY", "")
+# ── Qdrant ─────────────────────────────────────────────────────────────────
+QDRANT_URL     = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
 COLLECTION_NAME = "mindmap_sales_collateral"
 
-CHUNK_SIZE_WORDS    = 380    # ≈ 500 tokens
-CHUNK_OVERLAP_WORDS = 60    
+# ── Chunking ───────────────────────────────────────────────────────────────
+CHUNK_SIZE_WORDS    = 380
+CHUNK_OVERLAP_WORDS = 60
 MIN_CHUNK_WORDS     = 30
-ONEPAGER_THRESHOLD  = 400   
-UPSERT_BATCH        = 50    
+ONEPAGER_THRESHOLD  = 400
+UPSERT_BATCH        = 50
 
+# ── File routing ───────────────────────────────────────────────────────────
 VLM_REQUIRED_FILES = {
     "19 Billing Reconciliation for Home Care.pdf",
     "20 Cash Reciepts Posting.pdf",
@@ -40,6 +45,7 @@ VLM_REQUIRED_FILES = {
     "MindMap Digital 3 pager brief.pdf",
     "MindMap Fractional CFO Advisory.pdf",
     "MindMap Sharepoint Capabilites.pdf",
+    "MindMap Digital - the Art of Digital Transformation.pdf",  # moved from late add
 }
 
 SKIP_PDF_USE_PPTX = {
@@ -53,46 +59,65 @@ SKIP_PDF_USE_PPTX = {
     "MM Trade Processing & Settlement - Case Study.pdf",
 }
 
-# Exact duplicates — keep only the canonical version
 SKIP_DUPLICATES = {
-    "MindMap Digital New Deck v5 for gitex-MMDL_HY_007.pdf",   # dup of gitex PPTX
+    "MindMap Digital New Deck v5 for gitex-MMDL_HY_007.pdf",
     "09 Faster Diagnostics for Medical Diagnosis center (1).pdf",
     "Piramal Pharma Case Study.pdf",
     "Cheques Data Extraction Case Study.pdf",
 }
 
-VLM_REQUIRED_FILES.add("MindMap Digital - the Art of Digital Transformation.pdf")
+SKIP_FOLDERS     = {"Videos and Demos"}
+SKIP_EXTENSIONS  = {".mp4", ".mov", ".gif", ".jpg", ".jpeg", ".png", ".avi", ".xlsx"}
 
-SKIP_FOLDERS = {"Videos and Demos"}
+# ── Client name mapping ────────────────────────────────────────────────────
+CLIENT_NAME_MAP = {
+    "umc":        "United Methodist Communities",
+    "parker":     "Parker",
+    "fellowship": "Fellowship Village",
+    "ingleside":  "Ingleside",
+    "archcare":   "Archcare",
+    "intas":      "Intas Pharmaceuticals",
+    "piramal":    "Piramal Pharma",
+    "wio":        "Wio Bank",
+    "uae bank":   "UAE Bank",
+    "kotak":      "Kotak",
+    "authbridge": "Authbridge",
+    "nga":        "NGA HR",
+    "zurich":     "Zurich",
+    "ddc":        "TheDDCGroup",
+    "bluetide":   "BlueTide",
+    "clevercruit":"CleverCruit",
+}
 
-SKIP_EXTENSIONS = {".mp4", ".mov", ".gif", ".jpg", ".jpeg", ".png", ".avi", ".xlsx"}
-
+# ── Taxonomy ───────────────────────────────────────────────────────────────
 FOLDER_TO_DOCTYPE = {
     "Case Studies":                                     "case_study",
+    "new_case_Study":                                   "case_study",
     "HeatMaps":                                         "heatmap",
     "Different Types of Collateral":                    "capability_deck",
     "Client Specific Material which can be referenced": "proposal_client",
     "Samples and Examples":                             "assessment_sample",
     "Vertical Wise":                                    "industry_pack",
+    "SDD":                                              "solution_design",
 }
 
 FOLDER_TO_VERTICAL = {
-    "BFSI":                     ["BFSI"],
-    "Healthcare":               ["Healthcare"],
-    "F&A":                      ["FA"],
-    "HR":                       ["HR"],
-    "IT":                       ["IT"],
-    "Aviation":                 ["Aviation"],
-    "MFG":                      ["Manufacturing"],
-    "SCM":                      ["SCM"],
-    "Telecom":                  ["Telecom"],
-    "Government":               ["Government"],
-    "Retail":                   ["Retail"],
-    "Education":                ["Education"],
-    "Contact Centers":          ["Contact Centers"],
-    "Transport and Logistics":  ["Logistics"],
-    "SAP":                      ["SAP"],
-    "Legal":                    ["Legal"],
-    "Utilities":                ["Utilities"],
-    "Non Digital":              ["General"],
+    "BFSI":                    ["BFSI"],
+    "Healthcare":              ["Healthcare"],
+    "F&A":                     ["FA"],
+    "HR":                      ["HR"],
+    "IT":                      ["IT"],
+    "Aviation":                ["Aviation"],
+    "MFG":                     ["Manufacturing"],
+    "SCM":                     ["SCM"],
+    "Telecom":                 ["Telecom"],
+    "Government":              ["Government"],
+    "Retail":                  ["Retail"],
+    "Education":               ["Education"],
+    "Contact Centers":         ["Contact Centers"],
+    "Transport and Logistics": ["Logistics"],
+    "SAP":                     ["SAP"],
+    "Legal":                   ["Legal"],
+    "Utilities":               ["Utilities"],
+    "Non Digital":             ["General"],
 }
