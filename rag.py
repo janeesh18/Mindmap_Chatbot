@@ -25,6 +25,8 @@ RERANK_MODEL    = "rerank-english-v3.0"
 RERANK_TOP_N    = 5
 RETRIEVAL_TOP_K = 50
 
+FALLBACK_THRESHOLD = 2  # Min results before fallback triggers
+
 _openai: OpenAI | None        = None
 _qdrant: QdrantClient | None  = None
 _cohere: cohere.Client | None = None
@@ -130,9 +132,6 @@ def _clean_query(query: str) -> str:
 
 # ── Retrieval ─────────────────────────────────────────────────────────────────
 
-FALLBACK_THRESHOLD = 2  # Min results before fallback triggers
-
-
 def retrieve(user_query: str) -> List[Dict]:
     """Qdrant search (with intent-based filters) → Cohere rerank."""
     from qdrant_client.models import (
@@ -215,18 +214,27 @@ def retrieve(user_query: str) -> List[Dict]:
     if not chunks:
         return []
 
-    rerank_resp = cohere_client().rerank(
-        model=RERANK_MODEL,
-        query=_clean_query(user_query),
-        documents=[c.get("text", "") for c in chunks],
-        top_n=RERANK_TOP_N,
-    )
+    try:
+        rerank_resp = cohere_client().rerank(
+            model=RERANK_MODEL,
+            query=_clean_query(user_query),
+            documents=[c.get("text", "") for c in chunks],
+            top_n=RERANK_TOP_N,
+        )
+        reranked = []
+        for hit in rerank_resp.results:
+            chunk = chunks[hit.index]
+            chunk["_rerank_score"] = round(hit.relevance_score, 4)
+            reranked.append(chunk)
+    except Exception:
+        # Cohere unavailable (rate limit / network) — fall back to Qdrant order
+        reranked = chunks[:RERANK_TOP_N]
 
-    reranked = []
-    for hit in rerank_resp.results:
-        chunk = chunks[hit.index]
-        chunk["_rerank_score"] = round(hit.relevance_score, 4)
-        reranked.append(chunk)
+    # For client queries: if none of the reranked chunks have a named client,
+    # return empty so the bot says no data instead of hallucinating
+    if intent["client_query"]:
+        if not any(c.get("client_name") for c in reranked):
+            return []
 
     return reranked
 
