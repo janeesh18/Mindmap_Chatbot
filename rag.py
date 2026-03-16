@@ -20,11 +20,10 @@ from config import (
 
 load_dotenv()
 
-COHERE_API_KEY  = os.getenv("COHERE_API_KEY")
-RERANK_MODEL    = "rerank-english-v3.0"
-RERANK_TOP_N    = 5
-RETRIEVAL_TOP_K = 50
-
+COHERE_API_KEY     = os.getenv("COHERE_API_KEY")
+RERANK_MODEL       = "rerank-english-v3.0"
+RERANK_TOP_N       = 5
+RETRIEVAL_TOP_K    = 50
 FALLBACK_THRESHOLD = 2  # Min results before fallback triggers
 
 _openai: OpenAI | None        = None
@@ -233,7 +232,8 @@ def retrieve(user_query: str) -> List[Dict]:
     # For client queries: if none of the reranked chunks have a named client,
     # return empty so the bot says no data instead of hallucinating
     if intent["client_query"]:
-        if not any(c.get("client_name") for c in reranked):
+        has_named_client = any(c.get("client_name") for c in reranked)
+        if not has_named_client:
             return []
 
     return reranked
@@ -346,12 +346,20 @@ def stream_answer(
         yield _NO_DATA_RESPONSE
         return
 
-    context  = _format_context(chunks)
+    context = _format_context(chunks)
+
+    # Build explicit client-name allowlist so GPT-4o cannot extract names from text body
+    actual_clients = sorted({c.get("client_name") for c in chunks if c.get("client_name")})
+    client_note = (
+        f"\n\nVALID CLIENT NAMES (from 'Client:' fields only): {', '.join(actual_clients)}. "
+        "Do NOT mention any other client or company names found in the text."
+    ) if actual_clients else ""
+
     messages = [{"role": "system", "content": ANSWER_SYSTEM}]
     messages.extend(conversation_history[-10:])
     messages.append({
         "role":    "user",
-        "content": f"Context from sales collateral:\n\n{context}\n\nQuestion: {user_query}",
+        "content": f"Context from sales collateral:\n\n{context}\n\nQuestion: {user_query}{client_note}",
     })
 
     stream = openai_client().chat.completions.create(
