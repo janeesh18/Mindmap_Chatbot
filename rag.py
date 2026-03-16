@@ -85,7 +85,7 @@ _ROI_TRIGGERS = {
 
 _VERTICAL_TRIGGERS: Dict[str, List[str]] = {
     "Healthcare":    ["healthcare", "hospital", "patient", "clinical", "medical"],
-    "BFSI":          ["bank", "banking", "insurance", "fintech", "mortgage", "financial services"],
+    "BFSI":         ["bfsi", "bank", "banking", "insurance", "fintech", "mortgage", "financial services"],
     "Pharma":        ["pharma", "pharmaceutical", "drug manufacturing"],
     "Telecom":       ["telecom", "telecommunications"],
     "Manufacturing": ["manufacturing", "production", "plant", "factory"],
