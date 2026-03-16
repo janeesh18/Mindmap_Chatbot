@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Generator, List, Dict, Optional
+from typing import Dict, Generator, List, Optional
 
 import cohere
 from dotenv import load_dotenv
@@ -20,15 +20,17 @@ from config import (
 
 load_dotenv()
 
-COHERE_API_KEY = os.getenv("COHERE_API_KEY")
-RERANK_MODEL = "rerank-english-v3.0"
-RERANK_TOP_N = 5
+COHERE_API_KEY  = os.getenv("COHERE_API_KEY")
+RERANK_MODEL    = "rerank-english-v3.0"
+RERANK_TOP_N    = 5
 RETRIEVAL_TOP_K = 50
 
-_openai: OpenAI | None = None
-_qdrant: QdrantClient | None = None
+_openai: OpenAI | None        = None
+_qdrant: QdrantClient | None  = None
 _cohere: cohere.Client | None = None
 
+
+# ── Lazy clients ──────────────────────────────────────────────────────────────
 
 def openai_client() -> OpenAI:
     global _openai
@@ -54,12 +56,63 @@ def cohere_client() -> cohere.Client:
     return _cohere
 
 
+# ── Embedding ─────────────────────────────────────────────────────────────────
+
 def _embed_query(text: str) -> List[float]:
     resp = openai_client().embeddings.create(
         model=EMBEDDING_MODEL,
         input=text.replace("\n", " "),
     )
     return resp.data[0].embedding
+
+
+# ── Intent detection ──────────────────────────────────────────────────────────
+
+_CLIENT_TRIGGERS = {
+    "client", "customer", "worked with", "worked for", "case study", "case studies",
+    "which companies", "who have we", "our clients", "our customers", "past work",
+    "intas", "piramal", "umc", "parker", "fellowship", "ingleside", "archcare",
+    "wio", "uae bank", "kotak", "authbridge", "nga", "zurich",
+}
+
+_ROI_TRIGGERS = {
+    "roi", "savings", "cost saving", "cost reduction", "fte reduction", "fte",
+    "return on investment", "payback", "annual saving", "how much", "how many",
+    "benefit", "result", "outcome", "impact", "achieved", "efficiency",
+}
+
+_VERTICAL_TRIGGERS: Dict[str, List[str]] = {
+    "Healthcare":    ["healthcare", "hospital", "patient", "clinical", "medical"],
+    "BFSI":          ["bank", "banking", "insurance", "fintech", "mortgage", "financial services"],
+    "Pharma":        ["pharma", "pharmaceutical", "drug manufacturing"],
+    "Telecom":       ["telecom", "telecommunications"],
+    "Manufacturing": ["manufacturing", "production", "plant", "factory"],
+    "SCM":           ["supply chain", "demand planning", "procurement", "inventory"],
+    "HR":            ["human resources", "payroll", "recruitment", "onboarding"],
+    "FA":            ["accounts payable", "accounts receivable", "invoice", "fp&a", "financial planning"],
+    "Government":    ["government", "public sector"],
+    "Logistics":     ["logistics", "transportation", "freight"],
+    "Aviation":      ["aviation", "airline", "airport"],
+    "Education":     ["education", "university", "higher education"],
+}
+
+
+def _detect_intent(query: str) -> Dict:
+    q = query.lower()
+    intent: Dict = {"client_query": False, "roi_query": False, "vertical": None}
+
+    if any(kw in q for kw in _CLIENT_TRIGGERS):
+        intent["client_query"] = True
+
+    if any(kw in q for kw in _ROI_TRIGGERS):
+        intent["roi_query"] = True
+
+    for vertical, keywords in _VERTICAL_TRIGGERS.items():
+        if any(kw in q for kw in keywords):
+            intent["vertical"] = vertical
+            break
+
+    return intent
 
 
 def _clean_query(query: str) -> str:
@@ -75,28 +128,74 @@ def _clean_query(query: str) -> str:
     return cleaned if len(meaningful) >= 2 else query
 
 
+# ── Retrieval ─────────────────────────────────────────────────────────────────
+
 def retrieve(user_query: str) -> List[Dict]:
-    """Qdrant search → Cohere rerank."""
+    """Qdrant search (with intent-based filters) → Cohere rerank."""
+    from qdrant_client.models import (
+        FieldCondition,
+        Filter,
+        MatchAny,
+        MatchValue,
+        PayloadSelectorInclude,
+    )
+
     query_vec = _embed_query(_clean_query(user_query))
+    intent    = _detect_intent(user_query)
 
-    from qdrant_client.models import PayloadSelectorInclude
+    PAYLOAD_FIELDS = PayloadSelectorInclude(include=[
+        "text", "file_name", "file_path", "file_url",
+        "doc_type", "industry_vertical", "section_type",
+        "source_folder", "page_numbers", "client_name",
+    ])
 
-    results = qdrant_client().query_points(
-        collection_name=COLLECTION_NAME,
-        query=query_vec,
-        limit=RETRIEVAL_TOP_K,
-        with_payload=PayloadSelectorInclude(include=[
-            "text", "file_name", "file_path", "file_url",
-            "doc_type", "industry_vertical", "section_type",
-            "source_folder", "page_numbers",
-        ]),
-    ).points
+    def _search(qdrant_filter):
+        return qdrant_client().query_points(
+            collection_name=COLLECTION_NAME,
+            query=query_vec,
+            limit=RETRIEVAL_TOP_K,
+            query_filter=qdrant_filter,
+            with_payload=PAYLOAD_FIELDS,
+        ).points
+
+    # Build filter conditions from detected intent
+    must = []
+
+    if intent["client_query"]:
+        must.append(FieldCondition(
+            key="doc_type",
+            match=MatchAny(any=["case_study", "solution_design", "proposal_client"]),
+        ))
+
+    if intent["roi_query"]:
+        must.append(FieldCondition(
+            key="has_roi_metrics",
+            match=MatchValue(value=True),
+        ))
+
+    if intent["vertical"]:
+        must.append(FieldCondition(
+            key="industry_vertical",
+            match=MatchValue(value=intent["vertical"]),
+        ))
+
+    qdrant_filter = Filter(must=must) if must else None
+    results       = _search(qdrant_filter)
+
+    # Fallback 1: drop vertical filter if too few results
+    if len(results) < RERANK_TOP_N and intent["vertical"] and len(must) > 1:
+        must_no_vertical = [c for c in must if getattr(c, "key", None) != "industry_vertical"]
+        results = _search(Filter(must=must_no_vertical) if must_no_vertical else None)
+
+    # Fallback 2: drop all filters
+    if len(results) < RERANK_TOP_N and qdrant_filter:
+        results = _search(None)
 
     if not results:
         return []
 
-    cleaned = _clean_query(user_query)
-    filter_boilerplate = cleaned != user_query  # only filter if query was cleaned
+    cleaned            = _clean_query(user_query)
+    filter_boilerplate = cleaned != user_query
 
     BOILERPLATE = (
         "mindmap digital is a",
@@ -129,40 +228,30 @@ def retrieve(user_query: str) -> List[Dict]:
     return reranked
 
 
+# ── Answer generation ─────────────────────────────────────────────────────────
+
 ANSWER_SYSTEM = """
 You are a sales assistant for MindMap Digital — an RPA and AI automation consultancy.
-You help the internal sales team find relevant case studies, capabilities, ROI metrics, \
+You help the internal sales team find relevant case studies, capabilities, ROI metrics,
 and use cases from MindMap's sales collateral.
 
-CRITICAL — NO HALLUCINATION:
-- ONLY use information that appears word-for-word in the provided context chunks.
-- If a client name, metric, percentage, or outcome is not explicitly stated in the context, \
-DO NOT include it.
-- Do NOT invent, infer, extrapolate, or generalise any facts, numbers, client names, or outcomes.
-- Do NOT combine partial information from different chunks to fabricate a claim that no single \
-chunk supports.
-- If the context does not contain enough information, say exactly: \
-"No specific data available in current collateral. Check with the delivery team."
+CRITICAL RULE — NO HALLUCINATION:
+- You MUST only use information that appears word-for-word in the provided context chunks.
+- If a client name, metric, percentage, or outcome is not explicitly stated in the context, DO NOT include it.
+- Do NOT invent, infer, or generalise any facts, numbers, client names, or outcomes.
+- If the context does not contain enough information to answer, say exactly:
+  "No specific data available in current collateral. Check with the delivery team."
 
 RESPONSE LENGTH:
-- DEFAULT: Short and sharp — maximum 3 to 4 bullet points or 2 to 3 sentences. Sales reps need \
-quick answers they can use in front of a client.
-- IN-DEPTH: Only when the user explicitly asks with phrases like "explain in detail", "deep dive", \
-"elaborate", "tell me more", "expand", or "give me everything".
-- When in doubt, be shorter.
+- DEFAULT: Short — maximum 3 to 4 bullet points or 2 to 3 sentences.
+- IN-DEPTH ONLY when the user explicitly says "explain in detail", "deep dive",
+  "elaborate", "tell me more", or similar.
 
-FORMATTING:
-- Use bullet points or short sentences only.
-- No markdown headers (no #, ##, ###).
-- No emojis or informal language.
-- No source citations or document references in the answer.
-- When listing ROI metrics, quote them exactly as they appear in the context — do not round, \
-rephrase, or approximate.
-
-AMBIGUOUS QUERIES:
-- If the query is too vague to retrieve a useful answer (e.g. "tell me about automation"), ask \
-one short clarifying question instead of guessing. For example: "Could you specify the industry \
-or function area? (e.g. BFSI, Healthcare, Accounts Payable)"
+Other rules:
+- Use bullet points or short sentences — no markdown headers (no #, ##, ###)
+- Do not use emojis or informal language
+- Do not include source citations or document references in your answer
+- When listing ROI metrics, quote them exactly as they appear in the context
 """
 
 
@@ -189,13 +278,13 @@ def get_sources(chunks: List[Dict]) -> List[Dict]:
             continue
         if fname not in seen:
             seen[fname] = {
-                "file_name": fname,
-                "file_path": chunk.get("file_path", ""),
-                "file_url": chunk.get("file_url", ""),
-                "doc_type": chunk.get("doc_type", ""),
+                "file_name":         fname,
+                "file_path":         chunk.get("file_path", ""),
+                "file_url":          chunk.get("file_url", ""),
+                "doc_type":          chunk.get("doc_type", ""),
                 "industry_vertical": chunk.get("industry_vertical", []),
-                "source_folder": chunk.get("source_folder", ""),
-                "page_numbers": set(),
+                "source_folder":     chunk.get("source_folder", ""),
+                "page_numbers":      set(),
             }
         seen[fname]["page_numbers"].update(chunk.get("page_numbers", []))
 
@@ -206,10 +295,21 @@ def get_sources(chunks: List[Dict]) -> List[Dict]:
     return sources
 
 
+# ── Streaming ─────────────────────────────────────────────────────────────────
+
 _GREETINGS = {
     "hi", "hello", "hey", "hiya", "howdy", "greetings",
     "good morning", "good afternoon", "good evening",
 }
+
+_GREETING_RESPONSE = (
+    "Hello! How can I help you with MindMap Digital's sales collateral? "
+    "You can ask about case studies, capabilities, ROI metrics, or specific industry use cases."
+)
+
+_NO_DATA_RESPONSE = (
+    "No specific data available in current collateral. Check with the delivery team."
+)
 
 
 def stream_answer(
@@ -220,23 +320,18 @@ def stream_answer(
     """Stream an answer given pre-retrieved chunks (no retrieval inside)."""
 
     if user_query.strip().lower().rstrip("!.,") in _GREETINGS:
-        yield (
-            "Hello! How can I help you with MindMap Digital's sales collateral? "
-            "You can ask about case studies, capabilities, ROI metrics, "
-            "or specific industry use cases."
-        )
+        yield _GREETING_RESPONSE
         return
 
     if not chunks:
-        yield "No specific data available in current collateral. Check with the delivery team."
+        yield _NO_DATA_RESPONSE
         return
 
-    context = _format_context(chunks)
-
+    context  = _format_context(chunks)
     messages = [{"role": "system", "content": ANSWER_SYSTEM}]
     messages.extend(conversation_history[-10:])
     messages.append({
-        "role": "user",
+        "role":    "user",
         "content": f"Context from sales collateral:\n\n{context}\n\nQuestion: {user_query}",
     })
 
@@ -261,21 +356,14 @@ def answer(
     """2-stage pipeline: retrieve + rerank → stream answer. (Used by CLI.)"""
 
     if user_query.strip().lower().rstrip("!.,") in _GREETINGS:
-        yield (
-            "Hello! How can I help you with MindMap Digital's sales collateral? "
-            "You can ask about case studies, capabilities, ROI metrics, "
-            "or specific industry use cases."
-        )
+        yield _GREETING_RESPONSE
         return
 
     chunks = retrieve(user_query)
     yield from stream_answer(user_query, chunks, conversation_history)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# CLI — interactive chat loop
-# ═════════════════════════════════════════════════════════════════════════════
-
+# ── CLI ───────────────────────────────────────────────────────────────────────
 
 def chat_cli():
     print("\n" + "=" * 60)
@@ -307,7 +395,7 @@ def chat_cli():
 
         print("\n")
 
-        history.append({"role": "user", "content": user_input})
+        history.append({"role": "user",      "content": user_input})
         history.append({"role": "assistant", "content": full_response})
         if len(history) > 10:
             history = history[-10:]
