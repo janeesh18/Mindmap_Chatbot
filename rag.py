@@ -85,7 +85,7 @@ _ROI_TRIGGERS = {
 
 _VERTICAL_TRIGGERS: Dict[str, List[str]] = {
     "Healthcare":    ["healthcare", "hospital", "patient", "clinical", "medical"],
-    "BFSI":         ["bfsi", "bank", "banking", "insurance", "fintech", "mortgage", "financial services"],
+    "BFSI":          ["bfsi", "bank", "banking", "insurance", "fintech", "mortgage", "financial services"],
     "Pharma":        ["pharma", "pharmaceutical", "drug manufacturing"],
     "Telecom":       ["telecom", "telecommunications"],
     "Manufacturing": ["manufacturing", "production", "plant", "factory"],
@@ -212,6 +212,12 @@ def retrieve(user_query: str) -> List[Dict]:
             key="has_roi_metrics",
             match=MatchValue(value=True),
         ))
+        # Exclude generic industry packs — prefer case studies and client-specific docs
+        if not specific_client:
+            must.append(FieldCondition(
+                key="doc_type",
+                match=MatchAny(any=["case_study", "proposal_client", "assessment_sample", "solution_design"]),
+            ))
 
     # Don't add vertical filter for specific client queries (client_name filter is enough)
     if intent["vertical"] and not specific_client:
