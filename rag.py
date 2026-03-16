@@ -207,17 +207,16 @@ def retrieve(user_query: str) -> List[Dict]:
                 match=MatchAny(any=["case_study", "solution_design", "proposal_client"]),
             ))
 
-    if intent["roi_query"]:
+    if intent["roi_query"] and not specific_client:
         must.append(FieldCondition(
             key="has_roi_metrics",
             match=MatchValue(value=True),
         ))
         # Exclude generic industry packs — prefer case studies and client-specific docs
-        if not specific_client:
-            must.append(FieldCondition(
-                key="doc_type",
-                match=MatchAny(any=["case_study", "proposal_client", "assessment_sample", "solution_design"]),
-            ))
+        must.append(FieldCondition(
+            key="doc_type",
+            match=MatchAny(any=["case_study", "proposal_client", "assessment_sample", "solution_design"]),
+        ))
 
     # Don't add vertical filter for specific client queries (client_name filter is enough)
     if intent["vertical"] and not specific_client:
