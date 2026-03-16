@@ -98,6 +98,27 @@ _VERTICAL_TRIGGERS: Dict[str, List[str]] = {
     "Education":     ["education", "university", "higher education"],
 }
 
+# Primary vertical per named client — prevents healthcare clients appearing under
+# BFSI just because their documents mention banks, and vice versa
+_CLIENT_PRIMARY_VERTICAL: Dict[str, str] = {
+    "Kotak":                        "BFSI",
+    "UAE Bank":                     "BFSI",
+    "Wio Bank":                     "BFSI",
+    "Authbridge":                   "BFSI",
+    "Zurich":                       "BFSI",
+    "NGA HR":                       "HR",
+    "Intas Pharmaceuticals":        "Pharma",
+    "Piramal Pharma":               "Pharma",
+    "TheDDCGroup":                  "FA",
+    "Fellowship Village":           "Healthcare",
+    "Parker":                       "Healthcare",
+    "United Methodist Communities": "Healthcare",
+    "Ingleside":                    "Healthcare",
+    "Archcare":                     "Healthcare",
+    "BlueTide":                     "IT",
+    "CleverCruit":                  "HR",
+}
+
 
 def _detect_intent(query: str) -> Dict:
     q = query.lower()
@@ -250,17 +271,34 @@ def retrieve(user_query: str) -> List[Dict]:
                 key="industry_vertical",
                 match=MatchValue(value=intent["vertical"]),
             ))
-        client_results = _search(Filter(must=client_must))
+
+        # Use high limit so small clients (e.g. UAE Bank with 2 chunks) aren't crowded out
+        def _search_all(qdrant_filter):
+            return qdrant_client().query_points(
+                collection_name=COLLECTION_NAME,
+                query=query_vec,
+                limit=500,
+                query_filter=qdrant_filter,
+                with_payload=PAYLOAD_FIELDS,
+            ).points
+
+        client_results = _search_all(Filter(must=client_must))
 
         # Fallback: drop vertical filter if too few named-client results
         if len(client_results) < FALLBACK_THRESHOLD and intent["vertical"]:
-            client_results = _search(Filter(must=client_must[:1]))
+            client_results = _search_all(Filter(must=client_must[:1]))
 
         named: Dict[str, Dict] = {}
         for r in client_results:
             name = r.payload.get("client_name")
-            if name and name not in named:
-                named[name] = r.payload
+            if not name or name in named:
+                continue
+            # If filtering by vertical, only include clients whose primary vertical matches
+            if intent["vertical"]:
+                primary = _CLIENT_PRIMARY_VERTICAL.get(name)
+                if primary and primary != intent["vertical"]:
+                    continue
+            named[name] = r.payload
 
         if not named:
             return []
