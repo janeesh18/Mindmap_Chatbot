@@ -10,6 +10,7 @@ from openai import OpenAI
 from qdrant_client import QdrantClient
 
 from config import (
+    CLIENT_NAME_MAP,
     COLLECTION_NAME,
     EMBEDDING_DIM,
     EMBEDDING_MODEL,
@@ -116,6 +117,15 @@ def _detect_intent(query: str) -> Dict:
     return intent
 
 
+def _detect_specific_client(query: str) -> str | None:
+    """Return canonical client name if a specific known client is mentioned in the query."""
+    q = query.lower()
+    for key, name in CLIENT_NAME_MAP.items():
+        if key in q:
+            return name
+    return None
+
+
 def _clean_query(query: str) -> str:
     """Remove brand name from query so embedding focuses on topic, not company name.
     Only strips if enough meaningful words remain after removal."""
@@ -141,8 +151,9 @@ def retrieve(user_query: str) -> List[Dict]:
         PayloadSelectorInclude,
     )
 
-    query_vec = _embed_query(_clean_query(user_query))
-    intent    = _detect_intent(user_query)
+    query_vec       = _embed_query(_clean_query(user_query))
+    intent          = _detect_intent(user_query)
+    specific_client = _detect_specific_client(user_query) if intent["client_query"] else None
 
     PAYLOAD_FIELDS = PayloadSelectorInclude(include=[
         "text", "file_name", "file_path", "file_url",
@@ -163,10 +174,17 @@ def retrieve(user_query: str) -> List[Dict]:
     must = []
 
     if intent["client_query"]:
-        must.append(FieldCondition(
-            key="doc_type",
-            match=MatchAny(any=["case_study", "solution_design", "proposal_client"]),
-        ))
+        if specific_client:
+            # Direct lookup — filter by client_name so we always find that client's chunks
+            must.append(FieldCondition(
+                key="client_name",
+                match=MatchValue(value=specific_client),
+            ))
+        else:
+            must.append(FieldCondition(
+                key="doc_type",
+                match=MatchAny(any=["case_study", "solution_design", "proposal_client"]),
+            ))
 
     if intent["roi_query"]:
         must.append(FieldCondition(
@@ -174,7 +192,8 @@ def retrieve(user_query: str) -> List[Dict]:
             match=MatchValue(value=True),
         ))
 
-    if intent["vertical"]:
+    # Don't add vertical filter for specific client queries (client_name filter is enough)
+    if intent["vertical"] and not specific_client:
         must.append(FieldCondition(
             key="industry_vertical",
             match=MatchValue(value=intent["vertical"]),
@@ -183,13 +202,17 @@ def retrieve(user_query: str) -> List[Dict]:
     qdrant_filter = Filter(must=must) if must else None
     results       = _search(qdrant_filter)
 
+    # For specific client: no fallback — if client_name not in DB, return nothing
+    if specific_client and len(results) < FALLBACK_THRESHOLD:
+        return []
+
     # Fallback 1: drop vertical filter if too few results
-    if len(results) < FALLBACK_THRESHOLD and intent["vertical"] and len(must) > 1:
+    if len(results) < FALLBACK_THRESHOLD and intent["vertical"] and not specific_client and len(must) > 1:
         must_no_vertical = [c for c in must if getattr(c, "key", None) != "industry_vertical"]
         results = _search(Filter(must=must_no_vertical) if must_no_vertical else None)
 
-    # Fallback 2: drop all filters only if truly empty
-    if len(results) < FALLBACK_THRESHOLD and qdrant_filter:
+    # Fallback 2: drop all filters only if truly empty (not for specific client queries)
+    if len(results) < FALLBACK_THRESHOLD and qdrant_filter and not specific_client:
         results = _search(None)
 
     if not results:
@@ -213,6 +236,19 @@ def retrieve(user_query: str) -> List[Dict]:
     if not chunks:
         return []
 
+    # For general client list queries (no specific client): deduplicate by client_name
+    # so every named client gets representation, not just the top-ranked one
+    if intent["client_query"] and not specific_client:
+        named: Dict[str, Dict] = {}
+        for c in chunks:  # already in Qdrant relevance order
+            name = c.get("client_name")
+            if name and name not in named:
+                named[name] = c
+        if not named:
+            return []
+        return list(named.values())
+
+    # Normal Cohere reranking for specific client or non-client queries
     try:
         rerank_resp = cohere_client().rerank(
             model=RERANK_MODEL,
@@ -229,12 +265,9 @@ def retrieve(user_query: str) -> List[Dict]:
         # Cohere unavailable (rate limit / network) — fall back to Qdrant order
         reranked = chunks[:RERANK_TOP_N]
 
-    # For client queries: if none of the reranked chunks have a named client,
-    # return empty so the bot says no data instead of hallucinating
-    if intent["client_query"]:
-        has_named_client = any(c.get("client_name") for c in reranked)
-        if not has_named_client:
-            return []
+    # For specific client: verify the named client is actually present
+    if specific_client and not any(c.get("client_name") for c in reranked):
+        return []
 
     return reranked
 
