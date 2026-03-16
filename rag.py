@@ -236,14 +236,32 @@ def retrieve(user_query: str) -> List[Dict]:
     if not chunks:
         return []
 
-    # For general client list queries (no specific client): deduplicate by client_name
-    # so every named client gets representation, not just the top-ranked one
+    # For general client list queries (no specific client): search directly by
+    # client_name so doc_type restrictions don't hide named clients (e.g. Kotak
+    # is doc_type=industry_pack which would be filtered out by the doc_type check)
     if intent["client_query"] and not specific_client:
+        all_client_names = list(set(CLIENT_NAME_MAP.values()))
+        client_must = [FieldCondition(
+            key="client_name",
+            match=MatchAny(any=all_client_names),
+        )]
+        if intent["vertical"]:
+            client_must.append(FieldCondition(
+                key="industry_vertical",
+                match=MatchValue(value=intent["vertical"]),
+            ))
+        client_results = _search(Filter(must=client_must))
+
+        # Fallback: drop vertical filter if too few named-client results
+        if len(client_results) < FALLBACK_THRESHOLD and intent["vertical"]:
+            client_results = _search(Filter(must=client_must[:1]))
+
         named: Dict[str, Dict] = {}
-        for c in chunks:  # already in Qdrant relevance order
-            name = c.get("client_name")
+        for r in client_results:
+            name = r.payload.get("client_name")
             if name and name not in named:
-                named[name] = c
+                named[name] = r.payload
+
         if not named:
             return []
         return list(named.values())
