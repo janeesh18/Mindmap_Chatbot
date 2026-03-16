@@ -2,6 +2,7 @@ import json
 import os
 
 import streamlit as st
+import streamlit_authenticator as stauth
 
 from config import DATA_DIR
 from rag import _GREETINGS, get_sources, retrieve, stream_answer
@@ -12,8 +13,6 @@ st.set_page_config(
     layout="centered",
 )
 
-CHATS_FILE = str(DATA_DIR.parent / "chats.json")
-
 _PRONOUNS = {"them", "they", "it", "this", "that", "their", "these", "those"}
 
 MIME_MAP = {
@@ -21,6 +20,31 @@ MIME_MAP = {
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
+
+CHATS_FILE = str(DATA_DIR.parent / "chats.json")
+
+
+# ── Authentication ────────────────────────────────────────────────────────────
+
+credentials = {"usernames": {
+    k: {**dict(v), "logged_in": v.get("logged_in", False)}
+    for k, v in st.secrets["credentials"]["usernames"].items()
+}}
+
+authenticator = stauth.Authenticate(
+    credentials,
+    st.secrets["cookie"]["name"],
+    st.secrets["cookie"]["key"],
+    st.secrets["cookie"]["expiry_days"],
+)
+
+authenticator.login(location="main")
+
+if st.session_state.get("authentication_status") is False:
+    st.error("Incorrect username or password")
+    st.stop()
+elif not st.session_state.get("authentication_status"):
+    st.stop()
 
 
 # ── Persistence ───────────────────────────────────────────────────────────────
@@ -55,6 +79,7 @@ def current_chat():
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
+    authenticator.logout("Logout", "sidebar")
     st.title("Chats")
     if st.button("+ New Chat", use_container_width=True):
         st.session_state.chats.append({"title": "New Chat", "messages": [], "history": []})
