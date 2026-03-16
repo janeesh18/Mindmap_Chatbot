@@ -266,8 +266,9 @@ def retrieve(user_query: str) -> List[Dict]:
         reranked = chunks[:RERANK_TOP_N]
 
     # For specific client: verify the named client is actually present
-    if specific_client and not any(c.get("client_name") for c in reranked):
-        return []
+    if specific_client:
+        if not any(c.get("client_name") for c in reranked):
+            return []
 
     return reranked
 
@@ -385,7 +386,9 @@ def stream_answer(
     actual_clients = sorted({c.get("client_name") for c in chunks if c.get("client_name")})
     client_note = (
         f"\n\nVALID CLIENT NAMES (from 'Client:' fields only): {', '.join(actual_clients)}. "
-        "Do NOT mention any other client or company names found in the text."
+        "Do NOT mention any other client or company names found in the text. "
+        "If the question asks which clients or companies we have worked with, "
+        "list ONLY these names as the answer — do not say 'no data'."
     ) if actual_clients else ""
 
     messages = [{"role": "system", "content": ANSWER_SYSTEM}]
