@@ -3,8 +3,6 @@ qdrant-client>=1.9.0
 cohere>=5.0.0
 python-dotenv>=1.0.0
 streamlit>=1.35.0
-streamlit-authenticator==0.2.15
-extra-streamlit-components==0.1.60
-bcrypt==4.0.1
+streamlit-authenticator==0.4.2
 ragas>=0.1.21
 datasets>=2.19.0
