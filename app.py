@@ -1,7 +1,7 @@
 import os
 import json
+import bcrypt
 import streamlit as st
-import streamlit_authenticator as stauth
 from rag import retrieve, get_sources, stream_answer, _GREETINGS
 from config import DATA_DIR
 
@@ -13,28 +13,41 @@ st.set_page_config(
 
 # ── Authentication ─────────────────────────────────────────────────────────────
 
-credentials = {"usernames": {
-    k: dict(v)
-    for k, v in st.secrets["credentials"]["usernames"].items()
-}}
+def check_credentials(username, password):
+    users = st.secrets["credentials"]["usernames"]
+    if username not in users:
+        return False
+    hashed = users[username]["password"].encode()
+    return bcrypt.checkpw(password.encode(), hashed)
 
-authenticator = stauth.Authenticate(
-    credentials,
-    st.secrets["cookie"]["name"],
-    st.secrets["cookie"]["key"],
-    st.secrets["cookie"]["expiry_days"],
-)
 
-authenticator.login(location="main")
-
-if st.session_state.get("authentication_status") is False:
-    st.error("Incorrect username or password")
-    st.stop()
-elif not st.session_state.get("authentication_status"):
+if not st.session_state.get("authenticated"):
+    st.title("MindMap Sales Assistant")
+    with st.form("login_form"):
+        username  = st.text_input("Username")
+        password  = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Login")
+        if submitted:
+            if check_credentials(username, password):
+                st.session_state.authenticated = True
+                st.session_state.username = username
+                st.rerun()
+            else:
+                st.error("Incorrect username or password")
     st.stop()
 
 CHATS_FILE = str(DATA_DIR.parent / "chats.json")
 
+_PRONOUNS = {"them", "they", "it", "this", "that", "their", "these", "those"}
+
+MIME_MAP = {
+    ".pdf":  "application/pdf",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+
+
+# ── Chat persistence ───────────────────────────────────────────────────────────
 
 def load_chats():
     if os.path.exists(CHATS_FILE):
@@ -51,7 +64,7 @@ def save_chats():
         json.dump(st.session_state.chats, f)
 
 
-# ── Session state init ────────────────────────────────────────────────────────
+# ── Session state init ─────────────────────────────────────────────────────────
 
 if "chats" not in st.session_state:
     st.session_state.chats = load_chats()
@@ -63,13 +76,19 @@ def current_chat():
     return st.session_state.chats[st.session_state.active_chat]
 
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
+# ── Sidebar ────────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    authenticator.logout("Logout", "sidebar")
+    if st.button("Logout"):
+        st.session_state.authenticated = False
+        st.rerun()
+
     st.title("Chats")
+
     if st.button("+ New Chat", use_container_width=True):
-        st.session_state.chats.append({"title": "New Chat", "messages": [], "history": []})
+        st.session_state.chats.append(
+            {"title": "New Chat", "messages": [], "history": []}
+        )
         st.session_state.active_chat = len(st.session_state.chats) - 1
         save_chats()
         st.rerun()
@@ -86,19 +105,10 @@ with st.sidebar:
                 st.rerun()
 
 
-# ── Main area ─────────────────────────────────────────────────────────────────
+# ── Main area ──────────────────────────────────────────────────────────────────
 
 st.title("MindMap Sales Assistant")
 st.caption("Ask about case studies, capabilities, ROI metrics, and use cases.")
-
-
-_PRONOUNS = {"them", "they", "it", "this", "that", "their", "these", "those"}
-
-MIME_MAP = {
-    ".pdf":  "application/pdf",
-    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-}
 
 
 def render_sources(sources: list, key_prefix: str = "") -> None:
@@ -112,6 +122,7 @@ def render_sources(sources: list, key_prefix: str = "") -> None:
             file_url  = src.get("file_url", "")
             doc_type  = src.get("doc_type", "").replace("_", " ").title()
             verticals = src.get("industry_vertical", [])
+
             meta = doc_type
             if verticals:
                 meta += "  ·  " + ", ".join(verticals)
@@ -120,7 +131,11 @@ def render_sources(sources: list, key_prefix: str = "") -> None:
             with col1:
                 st.markdown(f"**{fname}**  \n*{meta}*")
             with col2:
-                full_path = str(DATA_DIR / fpath) if fpath and not os.path.isabs(fpath) else fpath
+                full_path = (
+                    str(DATA_DIR / fpath)
+                    if fpath and not os.path.isabs(fpath)
+                    else fpath
+                )
                 if full_path and os.path.exists(full_path):
                     ext = os.path.splitext(fname)[1].lower()
                     with open(full_path, "rb") as f:
@@ -136,17 +151,20 @@ def render_sources(sources: list, key_prefix: str = "") -> None:
                     st.link_button("Download", file_url)
 
 
-# ── Render existing messages ──────────────────────────────────────────────────
+# ── Render existing messages ───────────────────────────────────────────────────
 
 chat = current_chat()
 for i, msg in enumerate(chat["messages"]):
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if msg["role"] == "assistant" and msg.get("sources"):
-            render_sources(msg["sources"], key_prefix=f"c{st.session_state.active_chat}_msg{i}")
+            render_sources(
+                msg["sources"],
+                key_prefix=f"c{st.session_state.active_chat}_msg{i}",
+            )
 
 
-# ── Chat input ────────────────────────────────────────────────────────────────
+# ── Chat input ─────────────────────────────────────────────────────────────────
 
 if prompt := st.chat_input("Ask something..."):
     chat = current_chat()
@@ -168,7 +186,9 @@ if prompt := st.chat_input("Ask something..."):
             (m["content"] for m in reversed(history) if m["role"] == "assistant"), ""
         )
         if last_assistant:
-            resolved_prompt = f"{prompt} (context from previous answer: {last_assistant[:200]})"
+            resolved_prompt = (
+                f"{prompt} (context from previous answer: {last_assistant[:200]})"
+            )
 
     chunks  = [] if is_greeting else retrieve(resolved_prompt)
     sources = get_sources(chunks)
@@ -177,7 +197,9 @@ if prompt := st.chat_input("Ask something..."):
         response = st.write_stream(stream_answer(prompt, chunks, chat["history"]))
         render_sources(sources, key_prefix=f"c{st.session_state.active_chat}_current")
 
-    chat["messages"].append({"role": "assistant", "content": response, "sources": sources})
+    chat["messages"].append(
+        {"role": "assistant", "content": response, "sources": sources}
+    )
 
     chat["history"].append({"role": "user", "content": prompt})
     chat["history"].append({"role": "assistant", "content": response})
