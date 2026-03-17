@@ -27,7 +27,7 @@ authenticator = stauth.Authenticate(
     st.secrets["cookie"]["expiry_days"],
 )
 
-authenticator.login(location="main")
+authenticator.login("Login", "main")
 
 if st.session_state.get("authentication_status") is False:
     st.error("Incorrect username or password")
@@ -93,18 +93,32 @@ with st.sidebar:
                 st.rerun()
 
 
+# ── Main area ──────────────────────────────────────────────────────────────────
+
+st.title("MindMap Sales Assistant")
+st.caption("Ask about case studies, capabilities, ROI metrics, and use cases.")
+
+
 # ── Source renderer ────────────────────────────────────────────────────────────
+
+_PRONOUNS = {"them", "they", "it", "this", "that", "their", "these", "those"}
+
+MIME_MAP = {
+    ".pdf":  "application/pdf",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+
 
 def render_sources(sources: list, key_prefix: str = "") -> None:
     if not sources:
         return
 
     label = f"Sources ({len(sources)} file{'s' if len(sources) != 1 else ''})"
-
     with st.expander(label, expanded=False):
         for src in sources:
-            fname = src["file_name"]
-            fpath = src.get("file_path", "")
+            fname    = src["file_name"]
+            fpath    = src.get("file_path", "")
             file_url = src.get("file_url", "")
             doc_type = src.get("doc_type", "").replace("_", " ").title()
             verticals = src.get("industry_vertical", [])
@@ -123,11 +137,6 @@ def render_sources(sources: list, key_prefix: str = "") -> None:
                     else fpath
                 )
                 if full_path and os.path.exists(full_path):
-                    mime_map = {
-                        ".pdf":  "application/pdf",
-                        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    }
                     ext = os.path.splitext(fname)[1].lower()
                     with open(full_path, "rb") as f:
                         file_bytes = f.read()
@@ -135,19 +144,15 @@ def render_sources(sources: list, key_prefix: str = "") -> None:
                         label="Download",
                         data=file_bytes,
                         file_name=fname,
-                        mime=mime_map.get(ext, "application/octet-stream"),
+                        mime=MIME_MAP.get(ext, "application/octet-stream"),
                         key=f"{key_prefix}_{fname}",
                     )
                 elif file_url:
                     st.link_button("Download", file_url)
 
 
-# ── Main area ──────────────────────────────────────────────────────────────────
+# ── Render existing messages ───────────────────────────────────────────────────
 
-st.title("MindMap Sales Assistant")
-st.caption("Ask about case studies, capabilities, ROI metrics, and use cases.")
-
-# Render existing messages
 chat = current_chat()
 for i, msg in enumerate(chat["messages"]):
     with st.chat_message(msg["role"]):
@@ -158,14 +163,12 @@ for i, msg in enumerate(chat["messages"]):
                 key_prefix=f"c{st.session_state.active_chat}_msg{i}",
             )
 
-# ── Chat input ─────────────────────────────────────────────────────────────────
 
-_PRONOUNS = {"them", "they", "it", "this", "that", "their", "these", "those"}
+# ── Chat input ─────────────────────────────────────────────────────────────────
 
 if prompt := st.chat_input("Ask something..."):
     chat = current_chat()
 
-    # Set chat title from first user message
     if not chat["messages"]:
         chat["title"] = prompt[:40] + ("..." if len(prompt) > 40 else "")
 
@@ -175,8 +178,7 @@ if prompt := st.chat_input("Ask something..."):
 
     is_greeting = prompt.strip().lower().rstrip("!.,") in _GREETINGS
 
-    # Resolve vague follow-up queries ("what did we do for them?")
-    # by injecting context from the last assistant reply
+    # Resolve vague follow-up queries using last assistant reply for context
     resolved_prompt = prompt
     words = prompt.lower().split()
     if not is_greeting and len(words) <= 8 and any(w in _PRONOUNS for w in words):
@@ -190,7 +192,7 @@ if prompt := st.chat_input("Ask something..."):
                 f"{prompt} (context from previous answer: {last_assistant[:200]})"
             )
 
-    chunks = [] if is_greeting else retrieve(resolved_prompt)
+    chunks  = [] if is_greeting else retrieve(resolved_prompt)
     sources = get_sources(chunks)
 
     with st.chat_message("assistant"):
