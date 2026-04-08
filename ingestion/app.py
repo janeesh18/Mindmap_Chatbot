@@ -69,7 +69,19 @@ if not st.session_state.get("ms_user"):
     st.markdown("## MindMap Sales Assistant")
     st.markdown("Sign in with your Microsoft account to continue.")
     _url = _auth_url()
-    st.link_button("Sign in with Microsoft", _url, use_container_width=True, type="primary")
+    st.markdown("""
+        <style>
+        div[data-testid="stLinkButton"] a {
+            background-color: #0078d4 !important;
+            color: white !important;
+            border: none !important;
+        }
+        div[data-testid="stLinkButton"] a:hover {
+            background-color: #106ebe !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    st.link_button("Sign in with Microsoft", _url, use_container_width=True)
     st.stop()
 
 def _chats_file() -> str:
