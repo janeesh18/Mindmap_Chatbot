@@ -1,0 +1,8 @@
+openai>=1.40.0
+qdrant-client>=1.9.0
+cohere>=5.0.0
+python-dotenv>=1.0.0
+streamlit>=1.35.0
+msal>=1.28.0
+ragas>=0.1.21
+datasets>=2.19.0

@@ -1,0 +1,26 @@
+# Secrets & credentials
+.env
+*.env
+ingestion/.streamlit/secrets.toml
+ingestion/token.json
+ingestion/oauth_client.json
+ingestion/chatbot-*.json
+client_secret_*.json
+
+# Chat data
+chats*.json
+chunks_preview.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+1.28.0
+
+# Sales Collateral (large files)
+Sales Collateral/
+
+# Claude memory
+.claude/
