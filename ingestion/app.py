@@ -69,13 +69,7 @@ if not st.session_state.get("ms_user"):
     st.markdown("## MindMap Sales Assistant")
     st.markdown("Sign in with your Microsoft account to continue.")
     _url = _auth_url()
-    st.markdown(
-        f'<a href="{_url}" target="_self" style="display:inline-block;width:100%;text-align:center;'
-        f'padding:0.5em 1em;background:#0078d4;color:white;border-radius:6px;'
-        f'text-decoration:none;font-size:1em;font-weight:600;box-sizing:border-box;">'
-        f'Sign in with Microsoft</a>',
-        unsafe_allow_html=True,
-    )
+    st.link_button("Sign in with Microsoft", _url, use_container_width=True)
     st.stop()
 
 def _chats_file() -> str:
