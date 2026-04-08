@@ -70,10 +70,16 @@ if not st.session_state.get("ms_user"):
     st.markdown("Sign in with your Microsoft account to continue.")
     _url = _auth_url()
     st.markdown(
-        f'<a href="{_url}" target="_self" style="display:inline-block;width:100%;text-align:center;'
-        f'padding:0.5em 1em;background:#0078d4;color:white;border-radius:6px;'
-        f'text-decoration:none;font-size:1em;font-weight:600;box-sizing:border-box;">'
-        f'Sign in with Microsoft</a>',
+        f"""
+        <script>
+        function msLogin() {{
+            window.top.location.href = "{_url}";
+        }}
+        </script>
+        <button onclick="msLogin()" style="width:100%;padding:0.5em 1em;background:#0078d4;
+        color:white;border:none;border-radius:6px;font-size:1em;font-weight:600;cursor:pointer;">
+        Sign in with Microsoft</button>
+        """,
         unsafe_allow_html=True,
     )
     st.stop()
