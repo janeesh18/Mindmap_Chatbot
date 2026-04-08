@@ -4,6 +4,7 @@ import secrets as _secrets_mod
 from datetime import datetime
 import msal
 import streamlit as st
+import streamlit.components.v1 as _components
 from rag import retrieve, get_sources, stream_answer, generate_title, generate_summary, _GREETINGS
 from config import DATA_DIR
 
@@ -69,18 +70,14 @@ if not st.session_state.get("ms_user"):
     st.markdown("## MindMap Sales Assistant")
     st.markdown("Sign in with your Microsoft account to continue.")
     _url = _auth_url()
-    st.markdown(
+    _components.html(
         f"""
-        <script>
-        function msLogin() {{
-            window.top.location.href = "{_url}";
-        }}
-        </script>
-        <button onclick="msLogin()" style="width:100%;padding:0.5em 1em;background:#0078d4;
-        color:white;border:none;border-radius:6px;font-size:1em;font-weight:600;cursor:pointer;">
-        Sign in with Microsoft</button>
+        <a href="{_url}" target="_top" style="display:inline-block;width:100%;text-align:center;
+        padding:0.5em 1em;background:#0078d4;color:white;border-radius:6px;
+        text-decoration:none;font-size:1em;font-weight:600;box-sizing:border-box;">
+        Sign in with Microsoft</a>
         """,
-        unsafe_allow_html=True,
+        height=50,
     )
     st.stop()
 
