@@ -4,8 +4,16 @@ import secrets as _secrets_mod
 from datetime import datetime
 import msal
 import streamlit as st
+from supabase import create_client
 from rag import retrieve, get_sources, stream_answer, generate_title, generate_summary, _GREETINGS
 from config import DATA_DIR
+
+# ── Supabase ───────────────────────────────────────────────────────────────────
+_SB = create_client(
+    st.secrets["supabase"]["url"],
+    st.secrets["supabase"]["service_key"],
+)
+_ADMIN_EMAILS = ["janeesh.h@mindmapdigital.ai", "janeesh@mindmapdigital.com"]
 
 st.set_page_config(
     page_title="MindMap Sales Assistant",
@@ -84,25 +92,31 @@ if not st.session_state.get("ms_user"):
     st.link_button("Sign in with Microsoft", _url, use_container_width=True)
     st.stop()
 
-def _chats_file() -> str:
-    username = st.session_state.get("username", "default")
-    return str(DATA_DIR.parent / f"chats_{username}.json")
-
-
 def load_chats():
-    chats_file = _chats_file()
-    if os.path.exists(chats_file):
-        try:
-            with open(chats_file, "r") as f:
-                return json.load(f)
-        except Exception:
-            pass
+    username = st.session_state.get("username", "default")
+    try:
+        res = _SB.table("chats").select("data").eq("username", username).execute()
+        if res.data:
+            return res.data[0]["data"]
+    except Exception:
+        pass
     return [{"title": "New Chat", "messages": [], "history": []}]
 
 
 def save_chats():
-    with open(_chats_file(), "w") as f:
-        json.dump(st.session_state.chats, f)
+    username = st.session_state.get("username", "default")
+    email = st.session_state.get("ms_user", {}).get("email", "")
+    name = st.session_state.get("ms_user", {}).get("name", "")
+    try:
+        _SB.table("chats").upsert({
+            "username": username,
+            "email": email,
+            "name": name,
+            "data": st.session_state.chats,
+            "updated_at": datetime.utcnow().isoformat(),
+        }).execute()
+    except Exception:
+        pass
 
 
 # ── Session state init ────────────────────────────────────────────────────────
@@ -123,9 +137,16 @@ with st.sidebar:
     user_info = st.session_state.get("ms_user", {})
     st.caption(f"Signed in as **{user_info.get('name', '')}**")
     if st.button("Sign out", use_container_width=True):
-        for key in ("ms_user", "username", "name", "oauth_state"):
+        for key in ("ms_user", "username", "name", "oauth_state", "admin_view"):
             st.session_state.pop(key, None)
         st.rerun()
+
+    _is_admin = user_info.get("email", "").lower() in _ADMIN_EMAILS
+    if _is_admin:
+        if st.button("Admin View" if not st.session_state.get("admin_view") else "Back to Chat", use_container_width=True):
+            st.session_state.admin_view = not st.session_state.get("admin_view", False)
+            st.rerun()
+
     st.title("Chats")
     if st.button("+ New Chat", use_container_width=True):
         st.session_state.chats.append({"title": "New Chat", "messages": [], "history": []})
@@ -165,6 +186,26 @@ with st.sidebar:
                 st.session_state.active_chat = i
                 st.rerun()
 
+
+# ── Admin view ────────────────────────────────────────────────────────────────
+
+if st.session_state.get("admin_view"):
+    st.title("Admin — All User Chats")
+    try:
+        all_rows = _SB.table("chats").select("username, email, name, updated_at, data").execute()
+        for row in all_rows.data:
+            with st.expander(f"{row['name']} ({row['email']}) — last active: {row['updated_at'][:10]}"):
+                for chat in row["data"]:
+                    if not chat.get("messages"):
+                        continue
+                    st.markdown(f"**{chat['title']}**")
+                    for msg in chat["messages"]:
+                        role = "👤" if msg["role"] == "user" else "🤖"
+                        st.markdown(f"{role} {msg['content']}")
+                    st.divider()
+    except Exception as e:
+        st.error(f"Error loading chats: {e}")
+    st.stop()
 
 # ── Main area ─────────────────────────────────────────────────────────────────
 
