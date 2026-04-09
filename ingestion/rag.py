@@ -20,7 +20,17 @@ from config import (
 
 load_dotenv()
 
-COHERE_API_KEY  = os.getenv("COHERE_API_KEY")
+def _secret(key, default=""):
+    val = os.getenv(key)
+    if val:
+        return val
+    try:
+        import streamlit as st
+        return st.secrets.get(key, default)
+    except Exception:
+        return default
+
+COHERE_API_KEY  = _secret("COHERE_API_KEY")
 RERANK_MODEL    = "rerank-english-v3.0"
 RERANK_TOP_N    = 5
 RETRIEVAL_TOP_K = 50

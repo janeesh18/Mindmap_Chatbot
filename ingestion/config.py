@@ -9,11 +9,22 @@ if (_here / ".env").exists():
 else:
     load_dotenv(_here / ".env.example")
 
+# Pull missing keys from st.secrets (Streamlit Cloud) if not set by .env
+def _secret(key, default=""):
+    val = os.getenv(key)
+    if val:
+        return val
+    try:
+        import streamlit as st
+        return st.secrets.get(key, default)
+    except Exception:
+        return default
+
 # ── Paths ──────────────────────────────────────────────────────────────────
 DATA_DIR = Path(os.getenv("DATA_DIR", r"C:\Users\janee\OneDrive\文档\chatboit\Sales Collateral"))
 
 # ── OpenAI ─────────────────────────────────────────────────────────────────
-OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY")
+OPENAI_API_KEY  = _secret("OPENAI_API_KEY")
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIM   = 1536
 EMBEDDING_BATCH = 100        # texts per embeddings API call
@@ -21,8 +32,8 @@ VLM_MODEL       = "gpt-4o"
 IMAGE_DPI       = 150        # resolution for PDF→image render
 
 # ── Qdrant ─────────────────────────────────────────────────────────────────
-QDRANT_URL      = os.getenv("QDRANT_URL", "http://localhost:6333")
-QDRANT_API_KEY  = os.getenv("QDRANT_API_KEY", "")
+QDRANT_URL      = _secret("QDRANT_URL") or "http://localhost:6333"
+QDRANT_API_KEY  = _secret("QDRANT_API_KEY")
 COLLECTION_NAME = "mindmap_sales_collateral"
 
 # ── Chunking ───────────────────────────────────────────────────────────────
