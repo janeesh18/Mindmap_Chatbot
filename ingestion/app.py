@@ -6,7 +6,11 @@ import msal
 import streamlit as st
 from supabase import create_client
 from rag import retrieve, get_sources, stream_answer, generate_title, generate_summary, _GREETINGS
-from config import DATA_DIR
+from config import DATA_DIR, OPENAI_API_KEY
+
+# ── DEBUG (remove after confirming key) ───────────────────────────────────────
+import streamlit as _st_debug
+_st_debug.write(f"DEBUG key: ...{OPENAI_API_KEY[-6:] if OPENAI_API_KEY else 'NONE'}")
 
 # ── Supabase ───────────────────────────────────────────────────────────────────
 _SB = create_client(
